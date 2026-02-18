@@ -27,7 +27,6 @@ from typing import Any, Optional, Protocol, Sequence
 
 import httpx
 
-
 # ============================================================
 # アダプタ抽象（API 層から依存される境界）
 # ============================================================
@@ -145,7 +144,12 @@ class OdooJsonRpcClient:
         self._client.close()
 
     def authenticate(self) -> int:
-        """/web/session/authenticate で認証し、セッション cookie を確立する。"""
+        """/web/session/authenticate で認証し、セッション cookie を確立する。
+
+        Note:
+            - 成功時は Odoo ユーザーID（int）を返しインスタンスに保持する。
+            - HTTP 通信エラーおよび Odoo 側エラーは OdooJsonRpcError に統一して送出する。
+        """
         # Odoo Web JSON-RPC の認証ペイロード。
         payload = {
             "jsonrpc": "2.0",
@@ -157,9 +161,19 @@ class OdooJsonRpcClient:
             },
             "id": 1,
         }
-        # 認証 API 呼び出し。HTTP エラーは raise_for_status で例外化。
-        res = self._client.post("/web/session/authenticate", json=payload)
-        res.raise_for_status()
+        try:
+            # 認証 API 呼び出し。HTTP エラーは raise_for_status で例外化。
+            res = self._client.post("/web/session/authenticate", json=payload)
+            res.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # HTTP 4xx/5xx はアダプタ統一例外へ変換する。
+            raise OdooJsonRpcError(
+                f"認証 HTTP エラー ({exc.response.status_code}): {exc}"
+            ) from exc
+        except httpx.RequestError as exc:
+            # タイムアウト・接続失敗などの通信エラーを統一例外へ変換する。
+            raise OdooJsonRpcError(f"認証 通信エラー: {exc}") from exc
+
         # 返却 JSON 全体（error/result のどちらかを持つ）。
         data = res.json()
 
@@ -171,7 +185,9 @@ class OdooJsonRpcClient:
         result = data.get("result") or {}
         uid = result.get("uid")
         if not uid:
-            raise OdooJsonRpcError(f"authenticate failed: {data}")
+            raise OdooJsonRpcError(
+                f"authenticate failed: uid が取得できませんでした: {data}"
+            )
 
         # 以降の call_kw で利用できるよう保持する。
         self._uid = int(uid)
@@ -184,7 +200,13 @@ class OdooJsonRpcClient:
         args: Sequence[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
-        """/web/dataset/call_kw 経由で任意モデルメソッドを呼び出す。"""
+        """/web/dataset/call_kw 経由で任意モデルメソッドを呼び出す。
+
+        Note:
+            - 未認証の場合は自動で authenticate() を実行する。
+            - HTTP 通信エラーおよび Odoo 側エラーは OdooJsonRpcError に統一して送出する。
+            - 正常時は Odoo の result をそのまま返す（None の場合もある）。
+        """
         # 未認証なら先に認証し、セッションを確立する。
         if self._uid is None:
             self.authenticate()
@@ -201,15 +223,27 @@ class OdooJsonRpcClient:
             },
             "id": 2,
         }
-        # call_kw API 呼び出し。
-        res = self._client.post("/web/dataset/call_kw", json=payload)
-        res.raise_for_status()
+        try:
+            # call_kw API 呼び出し。
+            res = self._client.post("/web/dataset/call_kw", json=payload)
+            res.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # HTTP 4xx/5xx はアダプタ統一例外へ変換する。
+            raise OdooJsonRpcError(
+                f"call_kw HTTP エラー ({model}.{method}, {exc.response.status_code}): {exc}"
+            ) from exc
+        except httpx.RequestError as exc:
+            # タイムアウト・接続失敗などの通信エラーを統一例外へ変換する。
+            raise OdooJsonRpcError(
+                f"call_kw 通信エラー ({model}.{method}): {exc}"
+            ) from exc
+
         # 返却 JSON を解析する。
         data = res.json()
 
         # Odoo 側エラーをアプリ例外へ変換。
         if data.get("error"):
-            raise OdooJsonRpcError(f"call_kw error: {data['error']}")
+            raise OdooJsonRpcError(f"call_kw error ({model}.{method}): {data['error']}")
 
         # 正常時の result をそのまま返す。
         return data.get("result")
@@ -243,20 +277,38 @@ class OdooPosAdapter(PosAdapter):
         Note:
             - cfg.sku_field により照合列を切り替え可能。
             - 戻り値は {sku文字列: product_id} のマッピング。
+            - skus が空リストの場合は空辞書を即時返却する。
+            - Odoo 通信失敗時は OdooJsonRpcError を送出する。
         """
+        # 空リストなら Odoo を呼ばずに即時返却する。
+        if not skus:
+            return {}
+
         # SKU 照合に使うフィールド名（default_code / barcode など）。
         field = self.cfg.sku_field
 
-        # 対象 SKU 群を一括で search_read する。
-        rows = self.client.call_kw(
-            model="product.product",
-            method="search_read",
-            args=[
-                [[field, "in", skus]],
-                ["id", field, "name"],
-            ],
-            kwargs={"limit": max(1, len(skus))},
-        ) or []
+        try:
+            # 対象 SKU 群を一括で search_read する。
+            rows = (
+                self.client.call_kw(
+                    model="product.product",
+                    method="search_read",
+                    args=[
+                        [[field, "in", skus]],
+                        ["id", field, "name"],
+                    ],
+                    kwargs={"limit": max(1, len(skus))},
+                )
+                or []
+            )
+        except OdooJsonRpcError:
+            # call_kw からの OdooJsonRpcError はそのまま上位へ伝播させる。
+            raise
+        except Exception as exc:
+            # httpx 以外の予期しない例外も OdooJsonRpcError に統一する。
+            raise OdooJsonRpcError(
+                f"SKU 解決中に予期しないエラーが発生しました: {exc}"
+            ) from exc
 
         # SKU -> product_id の辞書を組み立てる。
         out: dict[str, int] = {}
@@ -278,7 +330,14 @@ class OdooPosAdapter(PosAdapter):
         pricelist_id: Optional[int] = None,
         note: Optional[str] = None,
     ) -> int:
-        """sale.order を下書き（見積）で作成する。"""
+        """sale.order を下書き（見積）で作成する。
+
+        Note:
+            - SKU → product_id 解決は resolve_product_ids_by_sku() に委譲する。
+            - 存在しない SKU が含まれる場合は OdooJsonRpcError を送出する。
+            - Odoo が返す sale.order ID（int）を型保証したうえで返却する。
+            - 通信エラー・Odoo 側エラーはいずれも OdooJsonRpcError を送出する。
+        """
         # 入力明細から SKU 一覧を抽出し、商品IDへ解決する。
         sku_list = [line.sku for line in lines]
         sku_to_pid = self.resolve_product_ids_by_sku(sku_list)
@@ -306,17 +365,45 @@ class OdooPosAdapter(PosAdapter):
         if note:
             so_vals["note"] = note
 
-        # 下書き受注を作成し、作成IDを返す。
-        so_id = self.client.call_kw("sale.order", "create", args=[so_vals])
+        # 下書き受注を作成する。戻り値は Odoo が発行したレコードID（int）。
+        try:
+            so_id = self.client.call_kw("sale.order", "create", args=[so_vals])
+        except OdooJsonRpcError:
+            # call_kw からの OdooJsonRpcError はそのまま上位へ伝播させる。
+            raise
+        except Exception as exc:
+            raise OdooJsonRpcError(
+                f"sale.order.create の呼び出しに失敗しました: {exc}"
+            ) from exc
+
+        # Odoo が None や非数値を返した場合は明示的にエラーとする。
+        if so_id is None or not isinstance(so_id, (int, float)):
+            raise OdooJsonRpcError(
+                f"sale.order.create が不正な戻り値を返しました（int 期待）: {so_id!r}"
+            )
         return int(so_id)
 
     def confirm_sale_order(self, sale_order_id: int) -> Any:
-        """sale.order を確定する（action_confirm）。"""
-        return self.client.call_kw(
-            "sale.order",
-            "action_confirm",
-            args=[[sale_order_id]],
-        )
+        """sale.order を確定する（action_confirm）。
+
+        Note:
+            - action_confirm は Odoo バージョンにより True または dict を返す場合がある。
+            - 戻り値の型は版差を吸収するため Any とする。
+            - 通信エラー・Odoo 側エラーはいずれも OdooJsonRpcError を送出する。
+        """
+        try:
+            return self.client.call_kw(
+                "sale.order",
+                "action_confirm",
+                args=[[sale_order_id]],
+            )
+        except OdooJsonRpcError:
+            # call_kw からの OdooJsonRpcError はそのまま上位へ伝播させる。
+            raise
+        except Exception as exc:
+            raise OdooJsonRpcError(
+                f"sale.order(id={sale_order_id}) の action_confirm に失敗しました: {exc}"
+            ) from exc
 
     # -------------------------
     # 案B：POS（pos.order.create_from_ui）

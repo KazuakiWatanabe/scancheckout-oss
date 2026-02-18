@@ -5,29 +5,28 @@
 
 Odoo 連携モード
 - mode="sale"（既定）: sale.order を下書き作成 → action_confirm で確定
-- mode="pos"           : pos.order.create_from_ui で POS 注文作成（※ 版差が大きい）
+- mode="pos"           : 現フェーズ未対応（HTTP 400 を返す）
 
 設計方針
 - POS 連携は adapters（pos_adapters/*）の内側に閉じ込める
 - 環境変数 POS_ADAPTER により将来の差し替えを容易にする（dummy / odoo など）
-- Codex で拡張しやすいよう、I/F と責務を明確にする
+- OdooJsonRpcError は HTTP 502、その他の例外は HTTP 500 に集約する
+- レスポンス形式: {ok, target, record_id, message} に固定する
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any, Literal, Optional, overload
-
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from typing import Literal, Optional
 
 from app.pos_adapters.odoo_jsonrpc import (
     CheckoutLine,
-    CheckoutRequest,
     OdooConfig,
     OdooJsonRpcError,
     OdooPosAdapter,
 )
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/pos", tags=["pos"])
 # このルーター配下の API は /pos/* として公開される。
@@ -59,45 +58,33 @@ class CheckoutIn(BaseModel):
     store_id: str = Field(..., description="店舗/テナント識別子")
     # 操作者ID。レジ担当などを紐づける任意フィールド。
     operator_id: Optional[str] = Field(None, description="操作者識別子（任意）")
-    # 連携先モード。sale は受注経由、pos は create_from_ui 経由。
+    # 連携先モード。現フェーズは sale のみ対応。pos を指定すると 400 を返す。
     mode: Literal["sale", "pos"] = Field(
         "sale",
-        description='sale: sale.order, pos: pos.order.create_from_ui',
+        description="sale: sale.order（対応済）/ pos: 現フェーズ未対応（400）",
     )
     # 明細行の一覧。最低1行以上を想定して利用側で渡す。
     lines: list[CheckoutLineIn]
     # 伝票や注文に紐づける任意メモ。
     note: Optional[str] = None
 
-    # mode="pos" のみで使用
-    # POS セッションID。未指定時は環境変数 DEFAULT_POS_SESSION_ID を使う。
-    pos_session_id: Optional[int] = Field(
-        None,
-        description=(
-            "mode='pos' の場合に必要。未指定なら DEFAULT_POS_SESSION_ID を参照。"
-        ),
-    )
-    # 顧客 partner_id。未指定時は環境変数 DEFAULT_PARTNER_ID（既定1）を使う。
-    partner_id: Optional[int] = Field(
-        None,
-        description=(
-            "顧客（partner）。未指定なら DEFAULT_PARTNER_ID を参照（既定: 店内客）。"
-        ),
-    )
-
 
 class CheckoutOut(BaseModel):
-    """/pos/checkout の標準レスポンス。"""
+    """/pos/checkout の標準レスポンス。
+
+    Note:
+        - エラー時は ok=False ではなく HTTP 4xx/5xx を返すため、
+          正常系では ok は常に True となる。
+        - target は作成した Odoo モデル名（現フェーズは "sale.order" 固定）。
+    """
 
     # API 処理全体の成否。
     ok: bool
-    # 実際に作成対象となった Odoo モデル名（sale.order / pos.order）。
+    # 実際に作成対象となった Odoo モデル名（現フェーズは "sale.order"）。
     target: str
-    # 作成レコードID。pos.create_from_ui のように即時IDが取れない場合は None。
+    # 作成レコードID。取得できない場合は None。
     record_id: Optional[int] = None
-    # Odoo からの生レスポンス（デバッグ/調査用途）。
-    raw: Optional[Any] = None
-    # 失敗時や補足情報を返すメッセージ。
+    # エラーや補足情報のメッセージ（通常は None）。
     message: Optional[str] = None
 
 
@@ -106,24 +93,11 @@ class CheckoutOut(BaseModel):
 # ============================================================
 
 
-@overload
-def _env(name: str) -> Optional[str]:
-    """default 未指定時: 未設定なら None を返す。"""
-    ...
-
-
-@overload
-def _env(name: str, default: str) -> str:
-    """default 指定時: 未設定なら default を返す。"""
-    ...
-
-
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     """環境変数を取得する。
 
     Note:
         - 未設定または空文字の場合は default を返す。
-        - default に str を渡した呼び出しでは、型上も str を返す。
     """
     value = os.getenv(name)
     return value if value not in (None, "") else default
@@ -142,7 +116,7 @@ def build_odoo_adapter_from_env() -> OdooPosAdapter:
     """環境変数から OdooPosAdapter を組み立てる。
 
     Note:
-        - ODOO_URL/DB/USER/PASSWORD は必須。
+        - ODOO_URL / ODOO_DB / ODOO_USER / ODOO_PASSWORD は必須。
         - 既定値のある項目は未設定時にフォールバックする。
     """
     # Odoo 接続に必須の接続情報。
@@ -152,21 +126,12 @@ def build_odoo_adapter_from_env() -> OdooPosAdapter:
     password = _required_env("ODOO_PASSWORD")
 
     # sale.order 作成時に使う既定 partner_id（店内客など）。
-    default_partner_id = int(_env("DEFAULT_PARTNER_ID", "1"))
+    default_partner_id = int(_env("DEFAULT_PARTNER_ID", "1"))  # type: ignore[arg-type]
     # 任意の価格表ID。未指定なら Odoo 既定ロジックに委譲。
     default_pricelist_id_raw = _env("DEFAULT_PRICELIST_ID")
     default_pricelist_id = (
         int(default_pricelist_id_raw) if default_pricelist_id_raw else None
     )
-
-    # mode="pos" で利用する既定セッションID。
-    default_pos_session_id_raw = _env("DEFAULT_POS_SESSION_ID")
-    default_pos_session_id = (
-        int(default_pos_session_id_raw) if default_pos_session_id_raw else None
-    )
-
-    # POS 伝票を draft 扱いで作るかどうかのフラグ。
-    create_pos_draft = _env("CREATE_POS_DRAFT", "true").lower() == "true"
     # SKU 解決に使う Odoo フィールド（default_code / barcode など）。
     sku_field = _env("SKU_FIELD", "default_code")
 
@@ -178,8 +143,6 @@ def build_odoo_adapter_from_env() -> OdooPosAdapter:
         password=password,
         default_partner_id=default_partner_id,
         default_pricelist_id=default_pricelist_id,
-        default_pos_session_id=default_pos_session_id,
-        create_pos_draft=create_pos_draft,
         sku_field=sku_field,
     )
     # 以降の業務処理はこの adapter インスタンスを介して実行する。
@@ -196,24 +159,27 @@ def checkout(body: CheckoutIn) -> CheckoutOut:
     """チェックアウト明細を Odoo に登録する。
 
     処理フロー:
-        1. 環境変数からアダプタ設定を構築
-        2. 入力明細を adapter 用モデルへ変換
-        3. mode に応じて sale.order または pos.order を作成
-    """
+        1. mode="pos" を先行ブロック（400）
+        2. 環境変数からアダプタ設定を構築
+        3. 入力明細を adapter 用モデルへ変換
+        4. sale.order を下書き作成 → action_confirm で確定
 
-    # 将来: POS_ADAPTER により dummy 等へ差し替え可能にする
-    # 現在の実装は odoo のみ許可する。
-    adapter_name = _env("POS_ADAPTER", "odoo")
-    if adapter_name != "odoo":
+    エラー:
+        - mode="pos": HTTP 400
+        - OdooJsonRpcError: HTTP 502（Odoo 側の障害）
+        - その他の例外: HTTP 500
+    """
+    # 現フェーズでは mode="pos" は未対応。明示的に 400 を返す。
+    if body.mode == "pos":
         raise HTTPException(
             status_code=400,
-            detail=f"未対応の POS_ADAPTER です: {adapter_name}",
+            detail="mode='pos' は現フェーズ未対応です。mode='sale' を指定してください。",
         )
 
     # Odoo 接続済みアダプタを生成する。
     adapter = build_odoo_adapter_from_env()
 
-    # 入力行をアダプタ用に変換
+    # 入力行をアダプタ用モデルへ変換する。
     # body.lines（HTTP 入力） -> CheckoutLine（アプリ境界内モデル）
     lines = [
         CheckoutLine(sku=line.sku, qty=line.qty, price_unit=line.price_unit)
@@ -221,56 +187,26 @@ def checkout(body: CheckoutIn) -> CheckoutOut:
     ]
 
     try:
-        if body.mode == "sale":
-            # 受注（sale.order）: 下書き→確定
-            # routes 層は I/O のみ担当し、Odoo 呼び出し詳細は adapter に委譲する。
-            result = adapter.checkout(
-                CheckoutRequest(
-                    # どの店舗・誰の操作かをログや追跡に使える形で渡す。
-                    store_id=body.store_id,
-                    operator_id=body.operator_id,
-                    lines=lines,
-                    note=body.note,
-                )
-            )
-            return CheckoutOut(
-                # adapter の標準結果を API レスポンスへそのまま写像する。
-                ok=result.ok,
-                target=result.target,
-                record_id=result.record_id,
-                raw=result.raw,
-                message=result.message,
-            )
-
-        # POS（create_from_ui）
-        # リクエスト優先でセッションIDを決定し、なければ既定値へフォールバック。
-        pos_session_id = body.pos_session_id or adapter.cfg.default_pos_session_id
-        if not pos_session_id:
-            raise HTTPException(
-                status_code=400,
-                detail="mode='pos' の場合は pos_session_id が必要です。",
-            )
-
-        # 顧客はリクエスト指定を優先し、未指定時は既定顧客を利用する。
-        partner_id = body.partner_id or adapter.cfg.default_partner_id
-        # create_from_ui の payload 組み立て/呼び出しは adapter 側で吸収する。
-        raw = adapter.create_pos_order_from_ui(
-            session_id=pos_session_id,
+        # 受注（sale.order）: 下書き作成 → 確定。
+        # adapter の個別メソッドを呼ぶことで OdooJsonRpcError を routes 層まで伝播させる。
+        so_id = adapter.create_sale_order_draft(
+            partner_id=adapter.cfg.default_partner_id,
             lines=lines,
-            partner_id=partner_id,
-            draft=adapter.cfg.create_pos_draft,
-            extra={
-                # 必要に応じて POS 側の追加フィールドを入れる
-                # 例: "note": body.note
-            },
+            pricelist_id=adapter.cfg.default_pricelist_id,
+            note=body.note,
         )
-        return CheckoutOut(ok=True, target="pos.order", record_id=None, raw=raw)
+        adapter.confirm_sale_order(so_id)
+        return CheckoutOut(
+            ok=True,
+            target="sale.order",
+            record_id=so_id,
+        )
 
     except OdooJsonRpcError as exc:
         # Odoo 側エラーは upstream 障害として 502 を返す。
         raise HTTPException(status_code=502, detail=f"Odoo エラー: {exc}") from exc
     except HTTPException:
-        # 明示的な業務エラーはそのまま透過。
+        # 明示的な業務エラーはそのまま透過させる。
         raise
     except Exception as exc:  # noqa: BLE001
         # 想定外エラーは 500 に集約し、原因文字列を返す。
