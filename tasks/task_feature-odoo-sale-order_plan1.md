@@ -51,6 +51,7 @@ services/api/app/pos_adapters/odoo_jsonrpc.py
 - 日本語 docstring 完備
 
 禁止：
+
 - create_from_ui 実装
 - 直接 call_kw を route から呼ぶこと
 

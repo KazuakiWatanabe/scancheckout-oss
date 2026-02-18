@@ -11,7 +11,7 @@
 ## 変更ファイル一覧
 
 | ファイル | 操作 | 内容 |
-|---|---|---|
+| --- | --- | --- |
 | `services/api/app/pos_adapters/odoo_jsonrpc.py` | 修正 | 例外強化・戻り値型保証・docstring 拡充 |
 | `services/api/app/routes/pos.py` | 修正 | mode="pos"→400、raw削除、個別メソッド呼び出し、502/500 正常化 |
 | `tests/test_odoo_jsonrpc.py` | 新規 | Adapter 単体テスト 23件 |
@@ -22,7 +22,7 @@
 
 ### pytest
 
-```
+```text
 ============================= test session starts =============================
 platform win32 -- Python 3.12.4, pytest-8.4.2, pluggy-1.6.0
 rootdir: C:\GitLab\scancheckout-oss
@@ -71,7 +71,7 @@ tests/test_pos_route.py::TestCheckoutValidation::test_invalid_qty_returns_422 PA
 
 ### black / isort
 
-```
+```bash
 $ python -m black --check --line-length 88 services/ tests/
 All done! 5 files would be left unchanged.
 
