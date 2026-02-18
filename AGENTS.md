@@ -136,3 +136,37 @@ MVPでは POS 依存実装を増やさない。
 「候補提示＋人補正＋データ蓄積」を最優先とする。
 
 最短で動くループを作り、精度は後から上げる。
+
+---
+
+## 10. tasks/ ディレクトリ運用
+
+`tasks/` は **実装タスク指示書（.md ファイル）を格納するフォルダ** である。
+
+### ディレクトリ構成例
+
+```
+project-root/
+├── CLAUDE.md
+├── AGENTS.md
+├── scancheckout_oss_plan.md
+│
+├── tasks/
+│   ├── feature-odoo-sale-order.md
+│   ├── feature-ui-scan-view.md
+│   └── done/
+│       └── feature-xxx.md
+│
+├── services/
+└── tests/
+```
+
+### 運用ルール
+
+- 作成タイミング：ブランチ作成時に同時作成
+- 削除タイミング：PRマージ後に削除 または `tasks/done/` へ移動
+- 命名規則：ブランチ名と一致させる  
+  例）`feature/odoo-sale-order` → `tasks/feature-odoo-sale-order.md`
+
+tasks/ は「一時的な作業指示置き場」であり、
+設計書（plan）や最上位ルール（AGENTS / CLAUDE）とは役割を分離する。
