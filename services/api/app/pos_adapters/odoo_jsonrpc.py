@@ -11,10 +11,10 @@
   - 下書き作成（sale.order.create）
   - 確定（sale.order.action_confirm）
 - POS 注文（pos.order）
-  - create_from_ui（※ Odoo の版差が大きいのでスケルトン）
+  - sync_from_ui（Odoo 19 系）
 
 注意
-- POS の create_from_ui に渡す payload は Odoo バージョンや導入モジュールで変わります。
+- POS の sync_from_ui に渡す payload は Odoo バージョンや導入モジュールで変わります。
   実運用では POS 画面で注文した際の Network ペイロードを DevTools で確認し、
   build_pos_order_payload() を合わせるのが最短です。
 - SKU は既定で product.product.default_code を使用します（cfg.sku_field で変更可能）。
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol, Sequence
+from uuid import uuid4
 
 import httpx
 
@@ -109,10 +110,10 @@ class OdooConfig:
     # 未指定時は Odoo 既定価格表に委譲。
     default_pricelist_id: Optional[int] = None
 
-    # POS 用の既定値（create_from_ui のみ）
+    # POS 用の既定値（sync_from_ui のみ）
     # mode="pos" でセッションID未指定時に使う値。
     default_pos_session_id: Optional[int] = None
-    # create_from_ui 呼び出し時に draft フラグへ反映する値。
+    # sync_from_ui 呼び出し時に draft フラグへ反映する値。
     create_pos_draft: bool = True
 
     # SKU の参照フィールド（default_code / barcode など）
@@ -237,6 +238,44 @@ class OdooPosAdapter(PosAdapter):
     # 共通ユーティリティ
     # -------------------------
 
+    def resolve_products_by_sku(self, skus: list[str]) -> dict[str, dict[str, Any]]:
+        """SKU をキーに商品情報を解決する。
+
+        戻り値:
+            {
+                "<sku>": {
+                    "id": <product.product.id>,
+                    "name": <商品名>,
+                    "lst_price": <商品の既定単価>,
+                }
+            }
+
+        Note:
+            - sku_field は cfg.sku_field（default_code / barcode など）で切り替える。
+            - lst_price は明細で単価未指定時のフォールバックとして使う。
+        """
+        field = self.cfg.sku_field
+        rows = self.client.call_kw(
+            model="product.product",
+            method="search_read",
+            args=[
+                [[field, "in", skus]],
+                ["id", field, "name", "lst_price"],
+            ],
+            kwargs={"limit": max(1, len(skus))},
+        ) or []
+
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            key = row.get(field)
+            if key:
+                out[str(key)] = {
+                    "id": int(row["id"]),
+                    "name": row.get("name"),
+                    "lst_price": float(row.get("lst_price") or 0.0),
+                }
+        return out
+
     def resolve_product_ids_by_sku(self, skus: list[str]) -> dict[str, int]:
         """SKU -> product.product.id を解決する。
 
@@ -244,28 +283,35 @@ class OdooPosAdapter(PosAdapter):
             - cfg.sku_field により照合列を切り替え可能。
             - 戻り値は {sku文字列: product_id} のマッピング。
         """
-        # SKU 照合に使うフィールド名（default_code / barcode など）。
-        field = self.cfg.sku_field
+        products = self.resolve_products_by_sku(skus)
+        return {sku: int(data["id"]) for sku, data in products.items()}
 
-        # 対象 SKU 群を一括で search_read する。
+    def _assert_pos_session_exists(self, session_id: int) -> None:
+        """指定した POS セッションの存在と状態を検証する。
+
+        Note:
+            - closing_control / closed のセッションは同期対象として受け付けない。
+        """
         rows = self.client.call_kw(
-            model="product.product",
+            model="pos.session",
             method="search_read",
             args=[
-                [[field, "in", skus]],
-                ["id", field, "name"],
+                [["id", "=", session_id]],
+                ["id", "state"],
             ],
-            kwargs={"limit": max(1, len(skus))},
+            kwargs={"limit": 1},
         ) or []
+        if not rows:
+            raise OdooJsonRpcError(
+                "Unknown POS session: "
+                f"{session_id}. Odoo 側でセッション作成後に再実行してください。"
+            )
 
-        # SKU -> product_id の辞書を組み立てる。
-        out: dict[str, int] = {}
-        for row in rows:
-            # row[field] が実際の SKU 値。
-            key = row.get(field)
-            if key:
-                out[str(key)] = int(row["id"])
-        return out
+        state = rows[0].get("state")
+        if state in {"closing_control", "closed"}:
+            raise OdooJsonRpcError(
+                f"POS session {session_id} is not writable (state={state})."
+            )
 
     # -------------------------
     # 案A：受注（sale.order）
@@ -319,7 +365,7 @@ class OdooPosAdapter(PosAdapter):
         )
 
     # -------------------------
-    # 案B：POS（pos.order.create_from_ui）
+    # 案B：POS（pos.order.sync_from_ui）
     # -------------------------
 
     def build_pos_order_payload(
@@ -327,39 +373,59 @@ class OdooPosAdapter(PosAdapter):
         session_id: int,
         lines: list[CheckoutLine],
         partner_id: Optional[int],
+        draft: bool = True,
         extra: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        """create_from_ui に渡す payload を組み立てる（要：版差調整）。"""
-        # POS 明細の SKU を商品IDへ解決する。
+        """sync_from_ui に渡す 1件分の注文 payload を組み立てる。"""
+        # POS 明細の SKU を商品情報へ解決する。
         sku_list = [line.sku for line in lines]
-        sku_to_pid = self.resolve_product_ids_by_sku(sku_list)
+        sku_to_product = self.resolve_products_by_sku(sku_list)
 
-        # create_from_ui 用 lines（One2many コマンド形式）を生成する。
+        # sync_from_ui 用 lines（One2many コマンド形式）を生成する。
         pos_lines: list[list[Any]] = []
+        order_total = 0.0
         for line in lines:
-            pid = sku_to_pid.get(line.sku)
-            if not pid:
+            product = sku_to_product.get(line.sku)
+            if not product:
                 raise OdooJsonRpcError(f"Unknown SKU: {line.sku}")
 
-            line_vals: dict[str, Any] = {"product_id": pid, "qty": line.qty}
-            if line.price_unit is not None:
-                line_vals["price_unit"] = line.price_unit
+            unit_price = (
+                float(line.price_unit)
+                if line.price_unit is not None
+                else float(product["lst_price"])
+            )
+            subtotal = round(unit_price * line.qty, 2)
+            order_total += subtotal
+
+            line_vals: dict[str, Any] = {
+                "product_id": int(product["id"]),
+                "qty": line.qty,
+                "price_unit": unit_price,
+                "discount": 0.0,
+                "price_subtotal": subtotal,
+                "price_subtotal_incl": subtotal,
+                "tax_ids": [],
+            }
 
             # One2many コマンド: [0, 0, vals]
             pos_lines.append([0, 0, line_vals])
 
-        # create_from_ui が受け取る order payload 本体。
+        # sync_from_ui が受け取る order payload 本体（1件分）。
+        order_uuid = str(uuid4())
         payload: dict[str, Any] = {
-            "data": {
-                # フィールド名も版差があるため、実際の payload に合わせて修正する
-                "pos_session_id": session_id,
-                "partner_id": partner_id or False,
-                "lines": pos_lines,
-            }
+            "uuid": order_uuid,
+            "session_id": session_id,
+            "state": "draft" if draft else "paid",
+            "partner_id": partner_id or False,
+            "amount_total": round(order_total, 2),
+            "amount_tax": 0.0,
+            "amount_paid": 0.0 if draft else round(order_total, 2),
+            "amount_return": 0.0,
+            "lines": pos_lines,
         }
         if extra:
             # 呼び出し側から追加項目を注入できるようにする。
-            payload["data"].update(extra)
+            payload.update(extra)
         return payload
 
     def create_pos_order_from_ui(
@@ -370,19 +436,30 @@ class OdooPosAdapter(PosAdapter):
         draft: bool = True,
         extra: Optional[dict[str, Any]] = None,
     ) -> Any:
-        """pos.order.create_from_ui を呼ぶ（要：payload 調整）。"""
+        """pos.order.sync_from_ui を呼ぶ（Odoo 19 系）。"""
+        # Odoo 19 の最小実装では、未決済の draft 同期を優先する。
+        # draft=False は payment_ids 組み立ての版差が大きいため現時点では未対応。
+        if not draft:
+            raise OdooJsonRpcError(
+                "mode='pos' は現在 draft=True のみ対応です。"
+                "CREATE_POS_DRAFT=true を設定してください。"
+            )
+
+        self._assert_pos_session_exists(session_id)
+
         # まず版差調整可能な payload 生成処理を1か所に集約する。
         order_payload = self.build_pos_order_payload(
             session_id=session_id,
             lines=lines,
             partner_id=partner_id,
+            draft=draft,
             extra=extra,
         )
-        # create_from_ui のシグネチャに合わせて args を構成して呼び出す。
+        # sync_from_ui のシグネチャ: args=[[order_dict]]
         return self.client.call_kw(
             "pos.order",
-            "create_from_ui",
-            args=[[order_payload], draft],
+            "sync_from_ui",
+            args=[[order_payload]],
             kwargs={},
         )
 

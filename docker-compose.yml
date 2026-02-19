@@ -1,0 +1,57 @@
+services:
+  db:
+    image: postgres:16
+    container_name: scancheckout-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-odoo}
+      POSTGRES_USER: ${POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odoo}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - scancheckout-net
+    restart: unless-stopped
+
+  odoo:
+    image: odoo:19.0
+    container_name: scancheckout-odoo
+    depends_on:
+      - db
+    ports:
+      - "8069:8069"
+    environment:
+      HOST: db
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:-odoo}
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - ./odoo/addons:/mnt/extra-addons
+    networks:
+      - scancheckout-net
+    restart: unless-stopped
+
+  api:
+    build: ./services/api
+    container_name: scancheckout-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/api:/app
+    environment:
+      ODOO_URL: http://odoo:8069
+      ODOO_DB: ${POSTGRES_DB:-odoo}
+      ODOO_USER: ${ODOO_USER:-admin}
+      ODOO_PASSWORD: ${ODOO_PASSWORD:-admin}
+    depends_on:
+      - odoo
+    networks:
+      - scancheckout-net
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  odoo-data:
+
+networks:
+  scancheckout-net:
+    driver: bridge
