@@ -5,7 +5,7 @@
 
 Odoo 連携モード
 - mode="sale"（既定）: sale.order を下書き作成 → action_confirm で確定
-- mode="pos"           : pos.order.create_from_ui で POS 注文作成（※ 版差が大きい）
+- mode="pos"           : pos.order.sync_from_ui で POS 注文作成（Odoo 19系）
 
 設計方針
 - POS 連携は adapters（pos_adapters/*）の内側に閉じ込める
@@ -59,10 +59,10 @@ class CheckoutIn(BaseModel):
     store_id: str = Field(..., description="店舗/テナント識別子")
     # 操作者ID。レジ担当などを紐づける任意フィールド。
     operator_id: Optional[str] = Field(None, description="操作者識別子（任意）")
-    # 連携先モード。sale は受注経由、pos は create_from_ui 経由。
+    # 連携先モード。sale は受注経由、pos は POS 受注同期経由。
     mode: Literal["sale", "pos"] = Field(
         "sale",
-        description='sale: sale.order, pos: pos.order.create_from_ui',
+        description='sale: sale.order, pos: pos.order.sync_from_ui',
     )
     # 明細行の一覧。最低1行以上を想定して利用側で渡す。
     lines: list[CheckoutLineIn]
@@ -104,6 +104,28 @@ class CheckoutOut(BaseModel):
 # ============================================================
 # アダプタ生成
 # ============================================================
+
+
+def _extract_pos_order_id(raw: Any) -> Optional[int]:
+    """sync_from_ui の返却値から pos.order.id を抽出する。
+
+    Note:
+        - 返却形式は dict["pos.order"] の配列を想定する。
+        - 形式が異なる場合は None を返す。
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    orders = raw.get("pos.order")
+    if not isinstance(orders, list) or not orders:
+        return None
+
+    first_order = orders[0]
+    if not isinstance(first_order, dict):
+        return None
+
+    record_id = first_order.get("id")
+    return int(record_id) if isinstance(record_id, int) else None
 
 
 @overload
@@ -242,7 +264,7 @@ def checkout(body: CheckoutIn) -> CheckoutOut:
                 message=result.message,
             )
 
-        # POS（create_from_ui）
+        # POS（sync_from_ui）
         # リクエスト優先でセッションIDを決定し、なければ既定値へフォールバック。
         pos_session_id = body.pos_session_id or adapter.cfg.default_pos_session_id
         if not pos_session_id:
@@ -253,7 +275,7 @@ def checkout(body: CheckoutIn) -> CheckoutOut:
 
         # 顧客はリクエスト指定を優先し、未指定時は既定顧客を利用する。
         partner_id = body.partner_id or adapter.cfg.default_partner_id
-        # create_from_ui の payload 組み立て/呼び出しは adapter 側で吸収する。
+        # sync_from_ui の payload 組み立て/呼び出しは adapter 側で吸収する。
         raw = adapter.create_pos_order_from_ui(
             session_id=pos_session_id,
             lines=lines,
@@ -264,7 +286,12 @@ def checkout(body: CheckoutIn) -> CheckoutOut:
                 # 例: "note": body.note
             },
         )
-        return CheckoutOut(ok=True, target="pos.order", record_id=None, raw=raw)
+        return CheckoutOut(
+            ok=True,
+            target="pos.order",
+            record_id=_extract_pos_order_id(raw),
+            raw=raw,
+        )
 
     except OdooJsonRpcError as exc:
         # Odoo 側エラーは upstream 障害として 502 を返す。
