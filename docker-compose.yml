@@ -8,15 +8,46 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odoo}
     volumes:
       - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-odoo} -d ${POSTGRES_DB:-odoo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     networks:
       - scancheckout-net
     restart: unless-stopped
+
+  odoo-init:
+    image: odoo:19.0
+    container_name: scancheckout-odoo-init
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: db
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:-odoo}
+    command:
+      - odoo
+      - --database=${POSTGRES_DB:-odoo}
+      - --init=base
+      - --without-demo=all
+      - --stop-after-init
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - ./odoo/addons:/mnt/extra-addons
+    networks:
+      - scancheckout-net
+    restart: "no"
 
   odoo:
     image: odoo:19.0
     container_name: scancheckout-odoo
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      odoo-init:
+        condition: service_completed_successfully
     ports:
       - "8069:8069"
     environment:
@@ -43,7 +74,8 @@ services:
       ODOO_USER: ${ODOO_USER:-admin}
       ODOO_PASSWORD: ${ODOO_PASSWORD:-admin}
     depends_on:
-      - odoo
+      odoo:
+        condition: service_started
     networks:
       - scancheckout-net
     restart: unless-stopped

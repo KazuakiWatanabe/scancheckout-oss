@@ -38,7 +38,7 @@ app/
 
 ## 🐳 Docker構成
 
-想定 docker-compose 構成：
+実装済みの `docker-compose.yml` は以下の構成です。
 
 ```yaml
 services:
@@ -46,22 +46,29 @@ services:
     build: ./services/api
     ports:
       - "8000:8000"
-    env_file:
-      - .env
+    environment:
+      ODOO_URL: http://odoo:8069
+      ODOO_DB: odoo
+      ODOO_USER: admin
+      ODOO_PASSWORD: admin
     depends_on:
-      - db
+      - odoo
 
   db:
-    image: postgres:15
+    image: postgres:16
     environment:
-      POSTGRES_DB: scancheckout
-      POSTGRES_USER: scan
-      POSTGRES_PASSWORD: scan
+      POSTGRES_DB: odoo
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
     volumes:
       - db-data:/var/lib/postgresql/data
 
+  odoo-init:
+    image: odoo:19.0
+    command: odoo --database=odoo --init=base --without-demo=all --stop-after-init
+
   odoo:
-    image: odoo:17
+    image: odoo:19.0
     ports:
       - "8069:8069"
 
@@ -69,11 +76,24 @@ volumes:
   db-data:
 ```
 
-起動：
+起動手順（ローカル）：
 
 ```bash
-docker compose up --build
+cp .env.example .env
+docker compose down -v
+docker compose up -d --build
+docker compose ps
 ```
+
+確認URL：
+
+- API: `http://localhost:8000/health`
+- UI: `http://localhost:8000/ui/`
+- Odoo: `http://localhost:8069`
+
+Note:
+- `odoo-init` は初回起動時に DB を初期化して終了する one-shot サービスです。
+- 停止は `docker compose down`、データ含め初期化は `docker compose down -v` を使います。
 
 ---
 
