@@ -64,8 +64,7 @@ def main() -> None:
 - black/isort の実行結果
 - API疎通結果（curl など）
 - UI動作確認のスクリーンショット
-"""
-        .rstrip()
+""".rstrip()
         + "\n",
         encoding="utf-8",
     )
@@ -92,8 +91,7 @@ def main() -> None:
 ```
 （ここに貼る）
 ```
-"""
-        .rstrip()
+""".rstrip()
         + "\n",
         encoding="utf-8",
     )
@@ -102,8 +100,7 @@ def main() -> None:
         f"""title={args.title}
 created_at={now}
 git_ref={args.git_ref}
-"""
-        .rstrip()
+""".rstrip()
         + "\n",
         encoding="utf-8",
     )

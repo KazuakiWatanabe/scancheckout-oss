@@ -38,7 +38,9 @@ def client(tmp_path: Path) -> TestClient:
         image_dir: アップロード画像の保存先。
     """
     image_dir = tmp_path / "images"
-    scan_store_module._SCAN_STORE = scan_store_module.InMemoryScanStore(image_dir=image_dir)
+    scan_store_module._SCAN_STORE = scan_store_module.InMemoryScanStore(
+        image_dir=image_dir
+    )
 
     with TestClient(app) as test_client:
         yield test_client
