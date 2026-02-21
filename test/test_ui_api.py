@@ -30,6 +30,7 @@ def test_ui_index_is_served(client: TestClient) -> None:
     assert "text/html" in response.headers.get("content-type", "")
     assert "撮影 → 候補提示 → 確定 → Odoo登録" in response.text
     assert 'id="cameraPreview"' in response.text
+    assert 'id="themeSelect"' in response.text
 
 
 def test_ui_script_is_served(client: TestClient) -> None:
@@ -39,3 +40,4 @@ def test_ui_script_is_served(client: TestClient) -> None:
     assert response.status_code == 200
     assert "javascript" in response.headers.get("content-type", "")
     assert "captureAndUploadScan" in response.text
+    assert "loadThemes" in response.text

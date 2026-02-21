@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.models.scan_store import get_scan_store
+from app.models.theme_store import ThemeRecord, get_theme_store
 from app.vision.infer import MODEL_VERSION, infer_topk_candidates
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -33,6 +34,8 @@ class ScanCreateOut(BaseModel):
     store_id: str
     # 端末識別子（任意）。
     device_id: Optional[str]
+    # 候補絞り込み Theme 識別子（任意）。
+    theme_id: Optional[str]
     # 保存先画像 URI。
     image_uri: str
     # MIME タイプ。
@@ -51,7 +54,7 @@ class InferIn(BaseModel):
     # 候補集合を絞るテーマ識別子（PR-B で利用予定）。
     #
     # Note:
-    #     - PR-A では受理のみ行い、候補絞り込みにはまだ使用しない。
+    #     - PR-B では theme.sku_list による候補絞り込みへ利用する。
     theme_id: Optional[str] = Field(
         default=None,
         description="候補絞り込みテーマID（未指定可）。",
@@ -109,20 +112,49 @@ def _validate_upload_image(upload: UploadFile, image_bytes: bytes) -> None:
         )
 
 
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    """任意文字列を正規化する。
+
+    Note:
+        - 空文字や空白のみは None とみなす。
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped if stripped else None
+
+
+def _get_theme_or_404(theme_id: str) -> ThemeRecord:
+    """theme_id の Theme を取得し、未存在なら 404 を送出する。"""
+    store = get_theme_store()
+    record = store.get_theme(theme_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404, detail=f"theme_id が存在しません: {theme_id}"
+        )
+    return record
+
+
 @router.post("", response_model=ScanCreateOut)
 def create_scan(
     image: UploadFile = File(...),
     store_id: str = Form(...),
     device_id: Optional[str] = Form(None),
+    theme_id: Optional[str] = Form(None),
 ) -> ScanCreateOut:
     """画像を受け取り、scan_id を発行して保存する。"""
     image_bytes = image.file.read()
     _validate_upload_image(upload=image, image_bytes=image_bytes)
 
+    normalized_theme_id = _normalize_optional_text(theme_id)
+    if normalized_theme_id:
+        _get_theme_or_404(normalized_theme_id)
+
     store = get_scan_store()
     record = store.create_scan(
         store_id=store_id,
         device_id=device_id,
+        theme_id=normalized_theme_id,
         filename=image.filename or "upload.bin",
         content_type=image.content_type or "application/octet-stream",
         image_bytes=image_bytes,
@@ -131,6 +163,7 @@ def create_scan(
         scan_id=record.scan_id,
         store_id=record.store_id,
         device_id=record.device_id,
+        theme_id=record.theme_id,
         image_uri=record.image_uri,
         content_type=record.content_type,
         size_bytes=record.size_bytes,
@@ -148,11 +181,24 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
             status_code=404, detail=f"scan_id が存在しません: {scan_id}"
         )
 
+    requested_theme_id = _normalize_optional_text(body.theme_id)
+    if "theme_id" in body.model_fields_set:
+        if requested_theme_id:
+            _get_theme_or_404(requested_theme_id)
+        record = store.set_theme_id(scan_id=scan_id, theme_id=requested_theme_id)
+
+    effective_theme_id = requested_theme_id if requested_theme_id else record.theme_id
+    allowed_skus = None
+    if effective_theme_id:
+        theme = _get_theme_or_404(effective_theme_id)
+        allowed_skus = theme.sku_list
+
     image_bytes = store.load_image_bytes(scan_id)
     predictions = infer_topk_candidates(
         image_bytes=image_bytes,
         top_k=body.top_k,
-        theme_id=body.theme_id,
+        theme_id=effective_theme_id,
+        allowed_skus=allowed_skus,
     )
     detections = [
         {

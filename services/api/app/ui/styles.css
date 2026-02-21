@@ -86,15 +86,18 @@ body {
   color: var(--muted);
 }
 
-input {
+input,
+select {
   width: 100%;
   border: 1px solid #bec9d4;
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 14px;
+  background: #fff;
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(13, 107, 159, 0.16);

@@ -28,6 +28,7 @@ class ScanRecord:
         scan_id: スキャン識別子（UUID 文字列）。
         store_id: 店舗識別子。
         device_id: 端末識別子（任意）。
+        theme_id: 候補絞り込み Theme 識別子（任意）。
         image_uri: 保存画像のローカル URI。
         content_type: アップロード時の MIME タイプ。
         size_bytes: 画像サイズ（バイト）。
@@ -39,6 +40,7 @@ class ScanRecord:
     scan_id: str
     store_id: str
     device_id: Optional[str]
+    theme_id: Optional[str]
     image_uri: str
     content_type: str
     size_bytes: int
@@ -66,6 +68,7 @@ class InMemoryScanStore:
         *,
         store_id: str,
         device_id: Optional[str],
+        theme_id: Optional[str],
         filename: str,
         content_type: str,
         image_bytes: bytes,
@@ -81,6 +84,7 @@ class InMemoryScanStore:
             scan_id=scan_id,
             store_id=store_id,
             device_id=device_id,
+            theme_id=theme_id,
             image_uri=str(image_path.resolve()),
             content_type=content_type,
             size_bytes=len(image_bytes),
@@ -116,6 +120,16 @@ class InMemoryScanStore:
                 raise KeyError(scan_id)
             record.detections = detections
             record.model_version = model_version
+            self._records[scan_id] = record
+            return record
+
+    def set_theme_id(self, *, scan_id: str, theme_id: Optional[str]) -> ScanRecord:
+        """scan_id に紐づく Theme を更新する。"""
+        with self._lock:
+            record = self._records.get(scan_id)
+            if record is None:
+                raise KeyError(scan_id)
+            record.theme_id = theme_id
             self._records[scan_id] = record
             return record
 

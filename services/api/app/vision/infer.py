@@ -12,9 +12,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Optional
+from typing import Optional, Sequence
 
 MODEL_VERSION = "dummy-hash-v1"
+
+# MVP の固定候補カタログ（仮推論）。
+DUMMY_CATALOG: list[tuple[str, str]] = [
+    ("TEST-SVC", "Demo Service SKU"),
+    ("TEST-SKU", "Demo Product TEST"),
+    ("BREAD-001", "Croissant"),
+    ("BREAD-002", "Baguette"),
+    ("CAKE-001", "Cheese Cake"),
+]
 
 
 @dataclass(frozen=True)
@@ -33,6 +42,7 @@ def infer_topk_candidates(
     image_bytes: bytes,
     top_k: int = 3,
     theme_id: Optional[str] = None,
+    allowed_skus: Optional[Sequence[str]] = None,
 ) -> list[CandidatePrediction]:
     """画像バイト列から候補 TopK を生成する。
 
@@ -43,22 +53,22 @@ def infer_topk_candidates(
 
     Note:
         - theme_id は将来のテーマ絞り込み用の互換引数。
-        - PR-A 段階では候補計算に利用しない。
+        - allowed_skus 指定時は候補集合をその SKU に制限する。
     """
     if top_k < 1:
         raise ValueError("top_k must be >= 1")
 
-    # PR-A では未使用だが、I/F 互換維持のため受理しておく。
+    # theme_id 自体は候補集合に直接使わず、I/F 互換のため受理する。
     _ = theme_id
 
-    # MVP での固定候補カタログ。
-    catalog = [
-        ("TEST-SVC", "Demo Service SKU"),
-        ("TEST-SKU", "Demo Product TEST"),
-        ("BREAD-001", "Croissant"),
-        ("BREAD-002", "Baguette"),
-        ("CAKE-001", "Cheese Cake"),
-    ]
+    catalog = DUMMY_CATALOG
+    if allowed_skus is not None:
+        allowed_set = {sku for sku in allowed_skus}
+        catalog = [item for item in DUMMY_CATALOG if item[0] in allowed_set]
+
+    if not catalog:
+        return []
+
     if not image_bytes:
         image_bytes = b"empty-image"
 

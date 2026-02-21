@@ -50,7 +50,7 @@ def test_create_scan_and_infer_success(client: TestClient) -> None:
 
     infer_response = client.post(
         f"/scans/{scan_id}/infer",
-        json={"top_k": 3, "theme_id": "theme-bakery"},
+        json={"top_k": 3},
     )
     assert infer_response.status_code == 200
 

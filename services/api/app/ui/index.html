@@ -28,8 +28,10 @@
           <input id="operatorId" type="text" value="operator-01" />
         </label>
         <label class="field">
-          <span>theme_id（任意）</span>
-          <input id="themeId" type="text" placeholder="未実装のため空でも可" />
+          <span>Theme（任意）</span>
+          <select id="themeSelect">
+            <option value="">未選択（制限なし）</option>
+          </select>
         </label>
         <label class="field">
           <span>候補数 top_k（1-5）</span>
@@ -52,6 +54,14 @@
           <button id="captureUploadBtn" type="button">撮影して /scans へ送信</button>
         </div>
         <p class="meta">scan_id: <code id="scanIdText">未作成</code></p>
+      </section>
+
+      <section class="panel">
+        <h2>Theme一覧</h2>
+        <div class="actions">
+          <button id="reloadThemesBtn" type="button" class="ghost">Theme再読込</button>
+        </div>
+        <p class="meta">Themeは `GET /themes` から取得されます。</p>
       </section>
 
       <section class="panel">

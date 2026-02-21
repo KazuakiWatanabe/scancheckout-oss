@@ -16,6 +16,7 @@ const state = {
   scanId: null,
   candidates: [],
   selectedSku: "",
+  themes: [],
 };
 
 /** HTML 要素参照をまとめる。 */
@@ -23,7 +24,7 @@ const elements = {
   storeId: document.getElementById("storeId"),
   deviceId: document.getElementById("deviceId"),
   operatorId: document.getElementById("operatorId"),
-  themeId: document.getElementById("themeId"),
+  themeSelect: document.getElementById("themeSelect"),
   topK: document.getElementById("topK"),
   qty: document.getElementById("qty"),
   cameraPreview: document.getElementById("cameraPreview"),
@@ -39,6 +40,7 @@ const elements = {
   captureUploadBtn: document.getElementById("captureUploadBtn"),
   inferBtn: document.getElementById("inferBtn"),
   checkoutBtn: document.getElementById("checkoutBtn"),
+  reloadThemesBtn: document.getElementById("reloadThemesBtn"),
 };
 
 /**
@@ -57,6 +59,15 @@ function setStatus(level, message) {
  */
 function setResult(payload) {
   elements.resultView.textContent = JSON.stringify(payload, null, 2);
+}
+
+/**
+ * 選択中の theme_id を返す。
+ * @returns {string | null} 選択Theme。未選択時は null
+ */
+function getSelectedThemeId() {
+  const value = elements.themeSelect.value.trim();
+  return value ? value : null;
 }
 
 /**
@@ -101,6 +112,36 @@ async function fetchApi(url, options = {}) {
   }
 
   return parsed;
+}
+
+/** Theme 一覧を select へ反映する。 */
+function renderThemeOptions() {
+  const current = getSelectedThemeId();
+  elements.themeSelect.innerHTML = "";
+
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "未選択（制限なし）";
+  elements.themeSelect.appendChild(none);
+
+  state.themes.forEach((theme) => {
+    const option = document.createElement("option");
+    option.value = theme.theme_id;
+    option.textContent = `${theme.name} (${theme.sku_list.length} SKU)`;
+    elements.themeSelect.appendChild(option);
+  });
+
+  if (current) {
+    elements.themeSelect.value = current;
+  }
+}
+
+/** /themes を取得して Theme select を更新する。 */
+async function loadThemes() {
+  const payload = await fetchApi("/themes", { method: "GET" });
+  state.themes = Array.isArray(payload) ? payload : [];
+  renderThemeOptions();
+  setStatus("info", `Theme を読み込みました: ${state.themes.length} 件`);
 }
 
 /**
@@ -220,6 +261,7 @@ async function captureAndUploadScan() {
 
   const storeId = elements.storeId.value.trim();
   const deviceId = elements.deviceId.value.trim();
+  const themeId = getSelectedThemeId();
   if (!storeId) {
     throw new Error("store_id は必須です。");
   }
@@ -229,6 +271,9 @@ async function captureAndUploadScan() {
   formData.append("store_id", storeId);
   if (deviceId) {
     formData.append("device_id", deviceId);
+  }
+  if (themeId) {
+    formData.append("theme_id", themeId);
   }
 
   const payload = await fetchApi("/scans", {
@@ -250,7 +295,7 @@ async function runInfer() {
 
   const topK = normalizeTopK();
   elements.topK.value = String(topK);
-  const themeValue = elements.themeId.value.trim();
+  const themeId = getSelectedThemeId();
 
   const payload = await fetchApi(`/scans/${state.scanId}/infer`, {
     method: "POST",
@@ -259,7 +304,7 @@ async function runInfer() {
     },
     body: JSON.stringify({
       top_k: topK,
-      theme_id: themeValue || null,
+      theme_id: themeId,
     }),
   });
 
@@ -337,6 +382,10 @@ function bindEvents() {
   elements.checkoutBtn.addEventListener("click", () =>
     runWithErrorBoundary(checkoutSaleOrder),
   );
+  elements.reloadThemesBtn.addEventListener("click", () =>
+    runWithErrorBoundary(loadThemes),
+  );
 }
 
 bindEvents();
+runWithErrorBoundary(loadThemes);
