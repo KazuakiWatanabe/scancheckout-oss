@@ -14,11 +14,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field
-
 from app.models.scan_store import get_scan_store
 from app.vision.infer import MODEL_VERSION, infer_topk_candidates
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -49,6 +48,14 @@ class InferIn(BaseModel):
 
     # 返却候補数。MVP では 1-5 に制限する。
     top_k: int = Field(3, ge=1, le=5)
+    # 候補集合を絞るテーマ識別子（PR-B で利用予定）。
+    #
+    # Note:
+    #     - PR-A では受理のみ行い、候補絞り込みにはまだ使用しない。
+    theme_id: Optional[str] = Field(
+        default=None,
+        description="候補絞り込みテーマID（未指定可）。",
+    )
 
 
 class CandidateOut(BaseModel):
@@ -137,10 +144,16 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
     store = get_scan_store()
     record = store.get_scan(scan_id)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"scan_id が存在しません: {scan_id}")
+        raise HTTPException(
+            status_code=404, detail=f"scan_id が存在しません: {scan_id}"
+        )
 
     image_bytes = store.load_image_bytes(scan_id)
-    predictions = infer_topk_candidates(image_bytes=image_bytes, top_k=body.top_k)
+    predictions = infer_topk_candidates(
+        image_bytes=image_bytes,
+        top_k=body.top_k,
+        theme_id=body.theme_id,
+    )
     detections = [
         {
             "bbox": [0.0, 0.0, 1.0, 1.0],

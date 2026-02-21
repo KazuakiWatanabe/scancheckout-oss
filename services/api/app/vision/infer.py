@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from typing import Optional
 
 MODEL_VERSION = "dummy-hash-v1"
 
@@ -28,16 +29,27 @@ class CandidatePrediction:
     score: float
 
 
-def infer_topk_candidates(image_bytes: bytes, top_k: int = 3) -> list[CandidatePrediction]:
+def infer_topk_candidates(
+    image_bytes: bytes,
+    top_k: int = 3,
+    theme_id: Optional[str] = None,
+) -> list[CandidatePrediction]:
     """画像バイト列から候補 TopK を生成する。
 
     主要変数:
         digest: 画像バイト列のハッシュ値。
         start_index: 候補カタログの開始オフセット。
         score_noise: ハッシュ由来の微小ノイズ。
+
+    Note:
+        - theme_id は将来のテーマ絞り込み用の互換引数。
+        - PR-A 段階では候補計算に利用しない。
     """
     if top_k < 1:
         raise ValueError("top_k must be >= 1")
+
+    # PR-A では未使用だが、I/F 互換維持のため受理しておく。
+    _ = theme_id
 
     # MVP での固定候補カタログ。
     catalog = [
