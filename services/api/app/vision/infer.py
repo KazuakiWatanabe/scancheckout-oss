@@ -1,7 +1,7 @@
 """候補提示用のダミー推論モジュール。
 
 本モジュールはモデル未導入段階の暫定ロジックとして、
-画像バイト列から再現性のある TopK 候補を生成する。
+候補 SKU 集合から安定順の TopK 候補を生成する。
 
 Note:
     - DB や外部 API には依存しない。
@@ -11,7 +11,7 @@ Note:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hashlib import sha256
+from typing import Optional, Sequence
 
 MODEL_VERSION = "dummy-hash-v1"
 
@@ -28,39 +28,44 @@ class CandidatePrediction:
     score: float
 
 
-def infer_topk_candidates(image_bytes: bytes, top_k: int = 3) -> list[CandidatePrediction]:
-    """画像バイト列から候補 TopK を生成する。
+def infer_topk_candidates(
+    image_bytes: bytes,
+    top_k: int = 3,
+    theme_id: Optional[str] = None,
+    allowed_skus: Optional[Sequence[str]] = None,
+) -> list[CandidatePrediction]:
+    """候補 SKU 集合から安定順の TopK を生成する。
 
     主要変数:
-        digest: 画像バイト列のハッシュ値。
-        start_index: 候補カタログの開始オフセット。
-        score_noise: ハッシュ由来の微小ノイズ。
+        sorted_skus: 昇順ソート済みの候補 SKU 一覧。
+        raw_score: 順位に応じて減衰させる暫定スコア。
+
+    Note:
+        - Phase 1 では画像比較を行わず、`allowed_skus` のみを利用する。
+        - theme_id は呼び出しI/F互換のため受理する。
     """
     if top_k < 1:
         raise ValueError("top_k must be >= 1")
 
-    # MVP での固定候補カタログ。
-    catalog = [
-        ("TEST-SVC", "Demo Service SKU"),
-        ("TEST-SKU", "Demo Product TEST"),
-        ("BREAD-001", "Croissant"),
-        ("BREAD-002", "Baguette"),
-        ("CAKE-001", "Cheese Cake"),
-    ]
-    if not image_bytes:
-        image_bytes = b"empty-image"
+    # image_bytes/theme_id 自体は候補計算に使わない（I/F 互換維持）。
+    _ = image_bytes
+    _ = theme_id
 
-    digest = sha256(image_bytes).digest()
-    start_index = digest[0] % len(catalog)
-    max_count = min(top_k, len(catalog))
+    if allowed_skus is None:
+        return []
+
+    sorted_skus = sorted({sku for sku in allowed_skus if sku})
+    if not sorted_skus:
+        return []
+
+    max_count = min(top_k, len(sorted_skus))
 
     predictions: list[CandidatePrediction] = []
     for rank in range(max_count):
-        idx = (start_index + rank) % len(catalog)
-        sku, name = catalog[idx]
-        score_noise = digest[(rank + 1) % len(digest)] / 2550.0
-        raw_score = 0.95 - (rank * 0.12) - score_noise
+        sku = sorted_skus[rank]
+        raw_score = 0.95 - (rank * 0.12)
         score = round(max(0.01, min(0.99, raw_score)), 4)
-        predictions.append(CandidatePrediction(sku=sku, name=name, score=score))
+        # 商品名は SKU をそのまま使う（Phase 1 の暫定仕様）。
+        predictions.append(CandidatePrediction(sku=sku, name=sku, score=score))
 
     return predictions

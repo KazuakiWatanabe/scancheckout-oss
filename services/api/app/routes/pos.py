@@ -18,9 +18,6 @@ from __future__ import annotations
 import os
 from typing import Any, Literal, Optional, overload
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-
 from app.pos_adapters.odoo_jsonrpc import (
     CheckoutLine,
     CheckoutRequest,
@@ -28,6 +25,8 @@ from app.pos_adapters.odoo_jsonrpc import (
     OdooJsonRpcError,
     OdooPosAdapter,
 )
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/pos", tags=["pos"])
 # このルーター配下の API は /pos/* として公開される。
@@ -62,7 +61,7 @@ class CheckoutIn(BaseModel):
     # 連携先モード。sale は受注経由、pos は POS 受注同期経由。
     mode: Literal["sale", "pos"] = Field(
         "sale",
-        description='sale: sale.order, pos: pos.order.sync_from_ui',
+        description="sale: sale.order, pos: pos.order.sync_from_ui",
     )
     # 明細行の一覧。最低1行以上を想定して利用側で渡す。
     lines: list[CheckoutLineIn]

@@ -28,7 +28,6 @@ from uuid import uuid4
 
 import httpx
 
-
 # ============================================================
 # アダプタ抽象（API 層から依存される境界）
 # ============================================================
@@ -255,15 +254,18 @@ class OdooPosAdapter(PosAdapter):
             - lst_price は明細で単価未指定時のフォールバックとして使う。
         """
         field = self.cfg.sku_field
-        rows = self.client.call_kw(
-            model="product.product",
-            method="search_read",
-            args=[
-                [[field, "in", skus]],
-                ["id", field, "name", "lst_price"],
-            ],
-            kwargs={"limit": max(1, len(skus))},
-        ) or []
+        rows = (
+            self.client.call_kw(
+                model="product.product",
+                method="search_read",
+                args=[
+                    [[field, "in", skus]],
+                    ["id", field, "name", "lst_price"],
+                ],
+                kwargs={"limit": max(1, len(skus))},
+            )
+            or []
+        )
 
         out: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -292,15 +294,18 @@ class OdooPosAdapter(PosAdapter):
         Note:
             - closing_control / closed のセッションは同期対象として受け付けない。
         """
-        rows = self.client.call_kw(
-            model="pos.session",
-            method="search_read",
-            args=[
-                [["id", "=", session_id]],
-                ["id", "state"],
-            ],
-            kwargs={"limit": 1},
-        ) or []
+        rows = (
+            self.client.call_kw(
+                model="pos.session",
+                method="search_read",
+                args=[
+                    [["id", "=", session_id]],
+                    ["id", "state"],
+                ],
+                kwargs={"limit": 1},
+            )
+            or []
+        )
         if not rows:
             raise OdooJsonRpcError(
                 "Unknown POS session: "
