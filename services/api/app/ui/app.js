@@ -36,6 +36,7 @@ const elements = {
   selectedSku: document.getElementById("selectedSku"),
   candidateList: document.getElementById("candidateList"),
   resultView: document.getElementById("resultView"),
+  saleOrderIdText: document.getElementById("saleOrderIdText"),
   statusLine: document.getElementById("statusLine"),
   startCameraBtn: document.getElementById("startCameraBtn"),
   stopCameraBtn: document.getElementById("stopCameraBtn"),
@@ -75,6 +76,86 @@ function setStatus(level, message) {
  */
 function setResult(payload) {
   elements.resultView.textContent = JSON.stringify(payload, null, 2);
+}
+
+/**
+ * checkout 成功時の sale.order レコードIDを表示する。
+ * @param {string} value 表示値
+ */
+function setSaleOrderRecordId(value) {
+  elements.saleOrderIdText.textContent = value;
+}
+
+/**
+ * API エラーを構造化して扱うための例外クラス。
+ */
+class ApiError extends Error {
+  /**
+   * @param {number} status HTTP ステータス
+   * @param {unknown} body API レスポンス本文
+   */
+  constructor(status, body) {
+    const detail = extractApiErrorDetail(body);
+    super(`HTTP ${status}: ${detail}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * API レスポンス本文から表示用 detail を抽出する。
+ * @param {unknown} body API レスポンス本文
+ * @returns {string} detail 文字列
+ */
+function extractApiErrorDetail(body) {
+  if (body && typeof body === "object") {
+    if (typeof body.detail === "string" && body.detail) {
+      return body.detail;
+    }
+    if (typeof body.message === "string" && body.message) {
+      return body.message;
+    }
+    return JSON.stringify(body);
+  }
+  if (typeof body === "string" && body) {
+    return body;
+  }
+  return "unknown error";
+}
+
+/**
+ * checkout エラーを利用者向けメッセージに変換する。
+ * @param {ApiError} error API エラー
+ * @returns {string} 表示メッセージ
+ */
+function humanizeCheckoutError(error) {
+  const detail = extractApiErrorDetail(error.body);
+  if (error.status === 400) {
+    return `HTTP 400: 入力を確認してください（SKU/数量）: ${detail}`;
+  }
+  if (error.status === 502) {
+    return `HTTP 502: Odoo連携に失敗しました。Odoo起動状態とSKU一致を確認してください: ${detail}`;
+  }
+  return `HTTP ${error.status}: ${detail}`;
+}
+
+/**
+ * 非同期処理中だけボタンを disabled にする。
+ * @param {HTMLButtonElement} button 対象ボタン
+ * @param {string} busyLabel 実行中ラベル
+ * @param {() => Promise<void>} action 実行処理
+ */
+async function runWithBusyButton(button, busyLabel, action) {
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = busyLabel;
+  try {
+    await action();
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 /**
@@ -156,11 +237,7 @@ async function fetchApi(url, options = {}) {
   }
 
   if (!response.ok) {
-    const detail =
-      (parsed && typeof parsed === "object" && parsed.detail) ||
-      (parsed && typeof parsed === "object" && parsed.message) ||
-      String(parsed || "unknown error");
-    throw new Error(`HTTP ${response.status}: ${detail}`);
+    throw new ApiError(response.status, parsed);
   }
 
   return parsed;
@@ -544,7 +621,42 @@ async function checkoutSaleOrder() {
   });
 
   setResult(payload);
-  setStatus("success", "checkout を実行しました。結果を確認してください。");
+  const recordId =
+    payload &&
+    typeof payload === "object" &&
+    (typeof payload.record_id === "number" || typeof payload.record_id === "string")
+      ? String(payload.record_id)
+      : null;
+  setSaleOrderRecordId(recordId || "不明");
+  setStatus(
+    "success",
+    recordId
+      ? `sale.order を登録しました（record_id: ${recordId}）`
+      : "sale.order を登録しました（record_id: 不明）",
+  );
+}
+
+/** checkout 専用エラーハンドラ。 */
+async function runCheckoutWithErrorBoundary() {
+  await runWithBusyButton(elements.checkoutBtn, "登録中...", async () => {
+    try {
+      await checkoutSaleOrder();
+    } catch (error) {
+      if (error instanceof ApiError) {
+        const message = humanizeCheckoutError(error);
+        setSaleOrderRecordId("失敗");
+        setResult({
+          ok: false,
+          status: error.status,
+          message: message,
+          body: error.body,
+        });
+        setStatus("error", message);
+        return;
+      }
+      throw error;
+    }
+  });
 }
 
 /**
@@ -589,7 +701,7 @@ function bindEvents() {
   );
   elements.inferBtn.addEventListener("click", () => runWithErrorBoundary(runInfer));
   elements.checkoutBtn.addEventListener("click", () =>
-    runWithErrorBoundary(checkoutSaleOrder),
+    runWithErrorBoundary(runCheckoutWithErrorBoundary),
   );
   elements.reloadThemesBtn.addEventListener("click", () =>
     runWithErrorBoundary(loadThemes),

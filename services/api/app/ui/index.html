@@ -89,8 +89,11 @@
         <section class="panel">
           <h2>3. /pos/checkout（mode=sale）</h2>
           <div class="actions">
-            <button id="checkoutBtn" type="button">確定してOdoo登録</button>
+            <button id="checkoutBtn" type="button">会計へ（Odoo登録）</button>
           </div>
+          <p class="meta">
+            sale.order record_id: <code id="saleOrderIdText">未実行</code>
+          </p>
           <pre id="resultView" class="result">まだ実行されていません。</pre>
         </section>
       </section>
