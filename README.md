@@ -95,6 +95,39 @@ Note:
 - `odoo-init` は初回起動時に DB を初期化して終了する one-shot サービスです。
 - 停止は `docker compose down`、データ含め初期化は `docker compose down -v` を使います。
 
+## 🎬 デモ操作方法
+
+1. コンテナを起動します。
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+2. Odoo を開いて初期準備をします（`http://localhost:8069`）。
+- `Sales` アプリをインストール
+- 商品を作成し、`Internal Reference (default_code)` に次のSKUのいずれかを設定  
+  `TEST-SKU`, `TEST-SVC`, `BREAD-001`, `BREAD-002`, `CAKE-001`
+
+3. Theme を作成します（任意）。
+
+```bash
+curl -X POST http://localhost:8000/themes ^
+  -H "Content-Type: application/json" ^
+  -d "{\"name\":\"bakery\",\"sku_list\":[\"BREAD-001\",\"CAKE-001\"]}"
+```
+
+4. UI を開いて操作します（`http://localhost:8000/ui/`）。
+- `Theme` を選択（未選択でも可）
+- `カメラ開始` を押す
+- `撮影して /scans へ送信`
+- `/infer 実行` で候補を表示
+- SKUと数量を確認して `確定してOdoo登録`
+
+5. Odoo 側で結果を確認します。
+- `Sales > Quotations` に `sale.order` が作成されていることを確認
+- 必要に応じて受注内容（SKU/数量）を照合
+
 ---
 
 ## 🔐 セキュリティ方針
