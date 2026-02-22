@@ -1,7 +1,7 @@
 # Evidence
 
-- タイトル: feature/infer-master-skus
-- 作成日時: 2026-02-22 13:31:08
+- タイトル: feature/ui-checkout-sale-order
+- 作成日時: 2026-02-22 16:05:47
 - Git ref: HEAD
 
 ## 生成物
