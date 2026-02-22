@@ -9,83 +9,139 @@
   <body>
     <main class="page">
       <header class="hero">
-        <p class="eyebrow">ScanCheckout OSS / PR-A</p>
+        <p class="eyebrow">ScanCheckout OSS / PR-A + PR-B + PR-C + PR-D</p>
         <h1>撮影 → 候補提示 → 確定 → Odoo登録</h1>
         <p class="subtitle">MVP業務ループを最短で確認するための操作UIです。</p>
       </header>
 
-      <section class="panel grid two">
-        <label class="field">
-          <span>店舗ID（store_id）</span>
-          <input id="storeId" type="text" value="store-01" />
-        </label>
-        <label class="field">
-          <span>端末ID（device_id）</span>
-          <input id="deviceId" type="text" value="device-01" />
-        </label>
-        <label class="field">
-          <span>操作者ID（operator_id）</span>
-          <input id="operatorId" type="text" value="operator-01" />
-        </label>
-        <label class="field">
-          <span>Theme（任意）</span>
-          <select id="themeSelect">
-            <option value="">未選択（制限なし）</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>候補数 top_k（1-5）</span>
-          <input id="topK" type="number" min="1" max="5" value="3" />
-        </label>
-        <label class="field">
-          <span>数量 qty</span>
-          <input id="qty" type="number" min="0.01" step="0.01" value="1" />
-        </label>
+      <nav class="tab-nav">
+        <button id="tabScanBtn" class="tab-btn active" type="button">スキャン業務</button>
+        <button id="tabMasterBtn" class="tab-btn" type="button">
+          商品画像マスター
+        </button>
+      </nav>
+
+      <section id="scanTab" class="tab-panel">
+        <section class="panel grid two">
+          <label class="field">
+            <span>店舗ID（store_id）</span>
+            <input id="storeId" type="text" value="store-01" />
+          </label>
+          <label class="field">
+            <span>端末ID（device_id）</span>
+            <input id="deviceId" type="text" value="device-01" />
+          </label>
+          <label class="field">
+            <span>操作者ID（operator_id）</span>
+            <input id="operatorId" type="text" value="operator-01" />
+          </label>
+          <label class="field">
+            <span>Theme（任意）</span>
+            <select id="themeSelect">
+              <option value="">未選択（制限なし）</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>候補数 top_k（1-5）</span>
+            <input id="topK" type="number" min="1" max="5" value="3" />
+          </label>
+          <label class="field">
+            <span>数量 qty</span>
+            <input id="qty" type="number" min="0.01" step="0.01" value="1" />
+          </label>
+        </section>
+
+        <section class="panel camera">
+          <h2>1. カメラ撮影</h2>
+          <video id="cameraPreview" autoplay playsinline muted></video>
+          <canvas id="captureCanvas" hidden></canvas>
+          <img id="capturedImage" alt="撮影画像プレビュー" />
+          <div class="actions">
+            <button id="startCameraBtn" type="button">カメラ開始</button>
+            <button id="stopCameraBtn" type="button" class="ghost">カメラ停止</button>
+            <button id="captureUploadBtn" type="button">撮影して /scans へ送信</button>
+          </div>
+          <p class="meta">scan_id: <code id="scanIdText">未作成</code></p>
+        </section>
+
+        <section class="panel">
+          <h2>Theme一覧</h2>
+          <div class="actions">
+            <button id="reloadThemesBtn" type="button" class="ghost">
+              Theme再読込
+            </button>
+          </div>
+          <p class="meta">Themeは `GET /themes` から取得されます。</p>
+        </section>
+
+        <section class="panel">
+          <h2>2. 候補取得と確定</h2>
+          <div class="actions">
+            <button id="inferBtn" type="button">/infer 実行</button>
+          </div>
+          <ul id="candidateList" class="candidate-list"></ul>
+          <label class="field">
+            <span>確定SKU（候補を選択すると自動入力）</span>
+            <input id="selectedSku" type="text" placeholder="例: TEST-SKU" />
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>3. /pos/checkout（mode=sale）</h2>
+          <div class="actions">
+            <button id="checkoutBtn" type="button">確定してOdoo登録</button>
+          </div>
+          <pre id="resultView" class="result">まだ実行されていません。</pre>
+        </section>
       </section>
 
-      <section class="panel camera">
-        <h2>1. カメラ撮影</h2>
-        <video id="cameraPreview" autoplay playsinline muted></video>
-        <canvas id="captureCanvas" hidden></canvas>
-        <img id="capturedImage" alt="撮影画像プレビュー" />
-        <div class="actions">
-          <button id="startCameraBtn" type="button">カメラ開始</button>
-          <button id="stopCameraBtn" type="button" class="ghost">カメラ停止</button>
-          <button id="captureUploadBtn" type="button">撮影して /scans へ送信</button>
-        </div>
-        <p class="meta">scan_id: <code id="scanIdText">未作成</code></p>
+      <section id="masterTab" class="tab-panel hidden">
+        <section class="panel">
+          <h2>商品画像マスター登録</h2>
+          <div class="grid two">
+            <label class="field">
+              <span>SKU（必須）</span>
+              <input id="masterSku" type="text" placeholder="例: BREAD-001" />
+            </label>
+            <label class="field">
+              <span>note（任意）</span>
+              <input id="masterNote" type="text" placeholder="例: 正面 / 包装違い" />
+            </label>
+          </div>
+          <label class="field">
+            <span>画像ファイル（複数可）</span>
+            <input
+              id="masterFiles"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+            />
+          </label>
+          <div class="actions">
+            <button id="uploadProductImagesBtn" type="button">画像を登録</button>
+          </div>
+          <p id="masterUploadStatus" class="status info">待機中</p>
+          <pre id="masterUploadResult" class="result">まだ登録していません。</pre>
+        </section>
+
+        <section class="panel">
+          <h2>商品画像マスター一覧</h2>
+          <div class="grid two">
+            <label class="field">
+              <span>SKU フィルタ（任意）</span>
+              <input id="masterFilterSku" type="text" placeholder="空欄で全件" />
+            </label>
+          </div>
+          <div class="actions">
+            <button id="loadProductImagesBtn" type="button" class="ghost">一覧取得</button>
+          </div>
+          <p id="masterListStatus" class="status info">待機中</p>
+          <div id="productImageGrid" class="image-grid"></div>
+        </section>
       </section>
 
       <section class="panel">
-        <h2>Theme一覧</h2>
-        <div class="actions">
-          <button id="reloadThemesBtn" type="button" class="ghost">Theme再読込</button>
-        </div>
-        <p class="meta">Themeは `GET /themes` から取得されます。</p>
-      </section>
-
-      <section class="panel">
-        <h2>2. 候補取得と確定</h2>
-        <div class="actions">
-          <button id="inferBtn" type="button">/infer 実行</button>
-        </div>
-        <ul id="candidateList" class="candidate-list"></ul>
-        <label class="field">
-          <span>確定SKU（候補を選択すると自動入力）</span>
-          <input id="selectedSku" type="text" placeholder="例: TEST-SKU" />
-        </label>
-      </section>
-
-      <section class="panel">
-        <h2>3. /pos/checkout（mode=sale）</h2>
-        <div class="actions">
-          <button id="checkoutBtn" type="button">確定してOdoo登録</button>
-        </div>
-        <pre id="resultView" class="result">まだ実行されていません。</pre>
-      </section>
-
-      <section class="panel">
-        <h2>ステータス</h2>
+        <h2>共通ステータス</h2>
         <p id="statusLine" class="status info">待機中</p>
       </section>
     </main>

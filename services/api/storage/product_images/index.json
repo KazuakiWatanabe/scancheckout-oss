@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "image_id": "4062f752-57b3-4f82-8743-4df6b2f5dd97",
+      "sku": "anpan",
+      "filename": "4062f752-57b3-4f82-8743-4df6b2f5dd97.jpg",
+      "content_type": "image/jpeg",
+      "created_at": "2026-02-22T04:01:58.189190+00:00",
+      "note": "正面"
+    }
+  ]
+}

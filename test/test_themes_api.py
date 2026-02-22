@@ -20,6 +20,16 @@ def _sample_png_bytes() -> bytes:
     )
 
 
+def _register_master_image(client: TestClient, sku: str) -> None:
+    """推論候補に使う商品画像マスターを登録する。"""
+    response = client.post(
+        "/product-images",
+        data={"sku": sku},
+        files={"image": ("sample.png", _sample_png_bytes(), "image/png")},
+    )
+    assert response.status_code == 201
+
+
 def test_theme_crud_flow(client: TestClient) -> None:
     """Theme CRUD の一連処理が成立することを確認する。"""
     create_response = client.post(
@@ -66,6 +76,10 @@ def test_theme_crud_flow(client: TestClient) -> None:
 
 def test_infer_filters_candidates_by_theme(client: TestClient) -> None:
     """theme_id により infer 候補が theme.sku_list に制限されることを確認する。"""
+    _register_master_image(client, "BREAD-001")
+    _register_master_image(client, "CAKE-001")
+    _register_master_image(client, "TEST-SKU")
+
     theme_response = client.post(
         "/themes",
         json={"name": "焼き菓子", "sku_list": ["BREAD-001", "CAKE-001"]},
@@ -88,8 +102,7 @@ def test_infer_filters_candidates_by_theme(client: TestClient) -> None:
     payload = infer_response.json()
     candidates = payload["detections"][0]["candidates"]
     candidate_skus = [item["sku"] for item in candidates]
-    assert len(candidate_skus) <= 2
-    assert set(candidate_skus).issubset({"BREAD-001", "CAKE-001"})
+    assert candidate_skus == ["BREAD-001", "CAKE-001"]
 
 
 def test_infer_returns_404_for_unknown_theme_id(client: TestClient) -> None:

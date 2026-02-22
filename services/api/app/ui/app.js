@@ -17,6 +17,8 @@ const state = {
   candidates: [],
   selectedSku: "",
   themes: [],
+  productImages: [],
+  activeTab: "scan",
 };
 
 /** HTML 要素参照をまとめる。 */
@@ -41,6 +43,20 @@ const elements = {
   inferBtn: document.getElementById("inferBtn"),
   checkoutBtn: document.getElementById("checkoutBtn"),
   reloadThemesBtn: document.getElementById("reloadThemesBtn"),
+  tabScanBtn: document.getElementById("tabScanBtn"),
+  tabMasterBtn: document.getElementById("tabMasterBtn"),
+  scanTab: document.getElementById("scanTab"),
+  masterTab: document.getElementById("masterTab"),
+  masterSku: document.getElementById("masterSku"),
+  masterNote: document.getElementById("masterNote"),
+  masterFiles: document.getElementById("masterFiles"),
+  uploadProductImagesBtn: document.getElementById("uploadProductImagesBtn"),
+  masterUploadStatus: document.getElementById("masterUploadStatus"),
+  masterUploadResult: document.getElementById("masterUploadResult"),
+  masterFilterSku: document.getElementById("masterFilterSku"),
+  loadProductImagesBtn: document.getElementById("loadProductImagesBtn"),
+  masterListStatus: document.getElementById("masterListStatus"),
+  productImageGrid: document.getElementById("productImageGrid"),
 };
 
 /**
@@ -62,12 +78,48 @@ function setResult(payload) {
 }
 
 /**
+ * 商品画像登録ステータス表示を更新する。
+ * @param {"info" | "success" | "error"} level 表示レベル
+ * @param {string} message 画面表示メッセージ
+ */
+function setMasterUploadStatus(level, message) {
+  elements.masterUploadStatus.className = `status ${level}`;
+  elements.masterUploadStatus.textContent = message;
+}
+
+/**
+ * 商品画像登録結果を更新する。
+ * @param {unknown} payload 表示対象データ
+ */
+function setMasterUploadResult(payload) {
+  elements.masterUploadResult.textContent = JSON.stringify(payload, null, 2);
+}
+
+/**
+ * 商品画像一覧ステータス表示を更新する。
+ * @param {"info" | "success" | "error"} level 表示レベル
+ * @param {string} message 画面表示メッセージ
+ */
+function setMasterListStatus(level, message) {
+  elements.masterListStatus.className = `status ${level}`;
+  elements.masterListStatus.textContent = message;
+}
+
+/**
  * 選択中の theme_id を返す。
  * @returns {string | null} 選択Theme。未選択時は null
  */
 function getSelectedThemeId() {
   const value = elements.themeSelect.value.trim();
   return value ? value : null;
+}
+
+/**
+ * 商品画像マスター側の SKU 入力値を返す。
+ * @returns {string} SKU
+ */
+function getMasterSkuInput() {
+  return elements.masterSku.value.trim();
 }
 
 /**
@@ -114,6 +166,19 @@ async function fetchApi(url, options = {}) {
   return parsed;
 }
 
+/**
+ * タブの表示状態を切り替える。
+ * @param {"scan" | "master"} tab 選択タブ
+ */
+function setActiveTab(tab) {
+  state.activeTab = tab;
+  const showScan = tab === "scan";
+  elements.scanTab.classList.toggle("hidden", !showScan);
+  elements.masterTab.classList.toggle("hidden", showScan);
+  elements.tabScanBtn.classList.toggle("active", showScan);
+  elements.tabMasterBtn.classList.toggle("active", !showScan);
+}
+
 /** Theme 一覧を select へ反映する。 */
 function renderThemeOptions() {
   const current = getSelectedThemeId();
@@ -142,6 +207,132 @@ async function loadThemes() {
   state.themes = Array.isArray(payload) ? payload : [];
   renderThemeOptions();
   setStatus("info", `Theme を読み込みました: ${state.themes.length} 件`);
+}
+
+/** 商品画像一覧をサムネイル表示する。 */
+function renderProductImageGrid() {
+  elements.productImageGrid.innerHTML = "";
+  if (!state.productImages.length) {
+    const empty = document.createElement("p");
+    empty.className = "candidate-empty";
+    empty.textContent = "該当する商品画像はありません。";
+    elements.productImageGrid.appendChild(empty);
+    return;
+  }
+
+  state.productImages.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "image-card";
+
+    const link = document.createElement("a");
+    link.href = `/product-images/${item.image_id}/file`;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+
+    const img = document.createElement("img");
+    img.src = link.href;
+    img.alt = `${item.sku} ${item.image_id}`;
+    img.loading = "lazy";
+    img.className = "image-thumb";
+    link.appendChild(img);
+
+    const sku = document.createElement("p");
+    sku.className = "image-meta";
+    sku.textContent = `SKU: ${item.sku}`;
+
+    const imageId = document.createElement("p");
+    imageId.className = "image-meta";
+    imageId.textContent = `image_id: ${item.image_id}`;
+
+    const note = document.createElement("p");
+    note.className = "image-meta";
+    note.textContent = `note: ${item.note || "-"}`;
+
+    card.appendChild(link);
+    card.appendChild(sku);
+    card.appendChild(imageId);
+    card.appendChild(note);
+    elements.productImageGrid.appendChild(card);
+  });
+}
+
+/**
+ * APIエラーメッセージを表示向けに補足する。
+ * @param {string} message 元メッセージ
+ * @returns {string} 補足後メッセージ
+ */
+function humanizeProductImageError(message) {
+  if (message.includes("HTTP 413")) {
+    return `${message}（画像サイズが上限 5MB を超えています）`;
+  }
+  if (message.includes("HTTP 400")) {
+    return `${message}（Content-Type または SKU を確認してください）`;
+  }
+  return message;
+}
+
+/** 商品画像マスター一覧を取得する。 */
+async function loadProductImages() {
+  const sku = elements.masterFilterSku.value.trim();
+  const params = new URLSearchParams();
+  if (sku) {
+    params.set("sku", sku);
+  }
+  const url = params.toString()
+    ? `/product-images?${params.toString()}`
+    : "/product-images";
+
+  const payload = await fetchApi(url, { method: "GET" });
+  state.productImages = Array.isArray(payload) ? payload : [];
+  renderProductImageGrid();
+  setMasterListStatus(
+    "success",
+    `一覧を取得しました: ${state.productImages.length} 件`,
+  );
+}
+
+/** 商品画像マスターを複数画像で登録する。 */
+async function uploadProductImages() {
+  const sku = getMasterSkuInput();
+  const files = Array.from(elements.masterFiles.files || []);
+  const note = elements.masterNote.value.trim();
+
+  if (!sku) {
+    throw new Error("SKU は必須です。");
+  }
+  if (!files.length) {
+    throw new Error("画像ファイルを1件以上選択してください。");
+  }
+
+  elements.uploadProductImagesBtn.disabled = true;
+  const originalLabel = elements.uploadProductImagesBtn.textContent;
+  elements.uploadProductImagesBtn.textContent = "Uploading...";
+
+  const uploaded = [];
+  try {
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append("sku", sku);
+      if (note) {
+        formData.append("note", note);
+      }
+      formData.append("image", file, file.name);
+
+      const response = await fetchApi("/product-images", {
+        method: "POST",
+        body: formData,
+      });
+      uploaded.push(response);
+    }
+  } finally {
+    elements.uploadProductImagesBtn.disabled = false;
+    elements.uploadProductImagesBtn.textContent = originalLabel;
+  }
+
+  setMasterUploadResult(uploaded);
+  setMasterUploadStatus("success", `${uploaded.length} 件の画像を登録しました。`);
+  elements.masterFilterSku.value = sku;
+  await loadProductImages();
 }
 
 /**
@@ -369,8 +560,26 @@ async function runWithErrorBoundary(action) {
   }
 }
 
+/**
+ * 商品画像マスター操作の共通エラーハンドラ。
+ * @param {() => Promise<void>} action 実行関数
+ */
+async function runMasterWithErrorBoundary(action) {
+  try {
+    await action();
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    const message = humanizeProductImageError(raw);
+    setMasterUploadStatus("error", message);
+    setMasterListStatus("error", message);
+  }
+}
+
 /** 画面イベントを初期化する。 */
 function bindEvents() {
+  elements.tabScanBtn.addEventListener("click", () => setActiveTab("scan"));
+  elements.tabMasterBtn.addEventListener("click", () => setActiveTab("master"));
+
   elements.startCameraBtn.addEventListener("click", () =>
     runWithErrorBoundary(startCamera),
   );
@@ -385,7 +594,15 @@ function bindEvents() {
   elements.reloadThemesBtn.addEventListener("click", () =>
     runWithErrorBoundary(loadThemes),
   );
+  elements.uploadProductImagesBtn.addEventListener("click", () =>
+    runMasterWithErrorBoundary(uploadProductImages),
+  );
+  elements.loadProductImagesBtn.addEventListener("click", () =>
+    runMasterWithErrorBoundary(loadProductImages),
+  );
 }
 
 bindEvents();
+setActiveTab("scan");
 runWithErrorBoundary(loadThemes);
+runMasterWithErrorBoundary(loadProductImages);

@@ -24,6 +24,16 @@ def _sample_png_bytes() -> bytes:
     )
 
 
+def _register_master_image(client: TestClient, sku: str) -> None:
+    """推論候補に使う商品画像マスターを1件登録する。"""
+    response = client.post(
+        "/product-images",
+        data={"sku": sku, "note": "scan-test"},
+        files={"image": ("sample.png", _sample_png_bytes(), "image/png")},
+    )
+    assert response.status_code == 201
+
+
 def test_health_returns_ok(client: TestClient) -> None:
     """`GET /health` が稼働状態を返すことを確認する。"""
     response = client.get("/health")
@@ -34,6 +44,10 @@ def test_health_returns_ok(client: TestClient) -> None:
 
 def test_create_scan_and_infer_success(client: TestClient) -> None:
     """画像アップロードから推論まで一連処理が成功することを確認する。"""
+    _register_master_image(client, "BREAD-001")
+    _register_master_image(client, "BREAD-002")
+    _register_master_image(client, "CAKE-001")
+
     upload_response = client.post(
         "/scans",
         data={"store_id": "store-01", "device_id": "device-01"},
@@ -81,6 +95,9 @@ def test_create_scan_rejects_non_image(client: TestClient) -> None:
 
 def test_infer_accepts_null_theme_id(client: TestClient) -> None:
     """`theme_id` が null でも infer が成功することを確認する。"""
+    _register_master_image(client, "TEST-SKU")
+    _register_master_image(client, "BREAD-001")
+
     upload_response = client.post(
         "/scans",
         data={"store_id": "store-02"},

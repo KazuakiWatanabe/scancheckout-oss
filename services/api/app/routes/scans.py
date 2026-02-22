@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from app.models.product_image_store import get_product_image_store
 from app.models.scan_store import get_scan_store
 from app.models.theme_store import ThemeRecord, get_theme_store
 from app.vision.infer import MODEL_VERSION, infer_topk_candidates
@@ -187,18 +188,26 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
             _get_theme_or_404(requested_theme_id)
         record = store.set_theme_id(scan_id=scan_id, theme_id=requested_theme_id)
 
+    # 候補母集団は商品画像マスター登録済み SKU に限定する。
+    product_image_store = get_product_image_store()
+    master_skus = product_image_store.list_master_skus()
+
     effective_theme_id = requested_theme_id if requested_theme_id else record.theme_id
-    allowed_skus = None
+    allowed_skus: set[str]
     if effective_theme_id:
         theme = _get_theme_or_404(effective_theme_id)
-        allowed_skus = theme.sku_list
+        # Theme 指定時は theme.sku_list と master_skus の積集合を使う。
+        allowed_skus = set(theme.sku_list).intersection(master_skus)
+    else:
+        # Theme 未指定時は master_skus 全体を候補母集団にする。
+        allowed_skus = set(master_skus)
 
     image_bytes = store.load_image_bytes(scan_id)
     predictions = infer_topk_candidates(
         image_bytes=image_bytes,
         top_k=body.top_k,
         theme_id=effective_theme_id,
-        allowed_skus=allowed_skus,
+        allowed_skus=sorted(allowed_skus),
     )
     detections = [
         {

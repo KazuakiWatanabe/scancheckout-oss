@@ -1,7 +1,7 @@
 # Evidence
 
-- タイトル: feature-theme-crud
-- 作成日時: 2026-02-22 07:31:04
+- タイトル: feature/infer-master-skus
+- 作成日時: 2026-02-22 13:31:08
 - Git ref: HEAD
 
 ## 生成物
