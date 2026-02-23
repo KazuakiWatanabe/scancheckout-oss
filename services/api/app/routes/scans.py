@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from app.models.odoo_product_cache import get_odoo_product_cache_store
 from app.models.product_image_store import get_product_image_store
 from app.models.scan_store import get_scan_store
 from app.models.theme_store import ThemeRecord, get_theme_store
@@ -209,11 +210,19 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
         theme_id=effective_theme_id,
         allowed_skus=sorted(allowed_skus),
     )
+    cache_name_map = get_odoo_product_cache_store().get_name_map(
+        [prediction.sku for prediction in predictions]
+    )
     detections = [
         {
             "bbox": [0.0, 0.0, 1.0, 1.0],
             "candidates": [
-                {"sku": p.sku, "name": p.name, "score": p.score} for p in predictions
+                {
+                    "sku": p.sku,
+                    "name": cache_name_map.get(p.sku, p.name),
+                    "score": p.score,
+                }
+                for p in predictions
             ],
         }
     ]

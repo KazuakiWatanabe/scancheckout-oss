@@ -18,6 +18,8 @@
   実運用では POS 画面で注文した際の Network ペイロードを DevTools で確認し、
   build_pos_order_payload() を合わせるのが最短です。
 - SKU は既定で product.product.default_code を使用します（cfg.sku_field で変更可能）。
+- SKU 解決は Odoo 商品キャッシュ（storage/odoo_product_cache.json）を優先し、
+  未命中分のみ Odoo へ問い合わせます。
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from typing import Any, Optional, Protocol, Sequence
 from uuid import uuid4
 
 import httpx
+from app.models.odoo_product_cache import get_odoo_product_cache_store
 
 # ============================================================
 # アダプタ抽象（API 層から依存される境界）
@@ -237,6 +240,58 @@ class OdooPosAdapter(PosAdapter):
     # 共通ユーティリティ
     # -------------------------
 
+    def fetch_products_for_cache(
+        self,
+        *,
+        limit: int = 500,
+        updated_since: Optional[str] = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Odoo から商品情報を取得し、キャッシュ同期用行を返す。
+
+        主要変数:
+            domain: `default_code` が空でない商品のみを抽出する検索条件。
+            kwargs: `active_test=False` を含む search_read の追加オプション。
+
+        Note:
+            - active_test=False により active/inactive の両方を取得する。
+            - `updated_since` 指定時は write_date 以降へ絞り込む。
+        """
+        safe_limit = max(1, int(limit))
+        safe_offset = max(0, int(offset))
+
+        domain: list[Any] = [["default_code", "!=", False]]
+        if updated_since:
+            domain.append(["write_date", ">=", updated_since])
+
+        rows = (
+            self.client.call_kw(
+                model="product.product",
+                method="search_read",
+                args=[
+                    domain,
+                    [
+                        "id",
+                        "default_code",
+                        "name",
+                        "active",
+                        "barcode",
+                        "lst_price",
+                    ],
+                ],
+                kwargs={
+                    "limit": safe_limit,
+                    "offset": safe_offset,
+                    "order": "id asc",
+                    "context": {"active_test": False},
+                },
+            )
+            or []
+        )
+        if not isinstance(rows, list):
+            raise OdooJsonRpcError("product.product search_read の戻り値が不正です。")
+        return rows
+
     def resolve_products_by_sku(self, skus: list[str]) -> dict[str, dict[str, Any]]:
         """SKU をキーに商品情報を解決する。
 
@@ -252,22 +307,36 @@ class OdooPosAdapter(PosAdapter):
         Note:
             - sku_field は cfg.sku_field（default_code / barcode など）で切り替える。
             - lst_price は明細で単価未指定時のフォールバックとして使う。
+            - まずローカルキャッシュを参照し、未命中 SKU のみ Odoo へ問い合わせる。
         """
+        normalized_skus = sorted(
+            {str(sku).strip() for sku in skus if sku is not None and str(sku).strip()}
+        )
+        if not normalized_skus:
+            return {}
+
+        # 先にローカルキャッシュを参照し、未命中SKUのみ Odoo へ問い合わせる。
+        cache_store = get_odoo_product_cache_store()
+        out = cache_store.resolve_products_by_sku(normalized_skus)
+
+        unresolved_skus = [sku for sku in normalized_skus if sku not in out]
+        if not unresolved_skus:
+            return out
+
         field = self.cfg.sku_field
         rows = (
             self.client.call_kw(
                 model="product.product",
                 method="search_read",
                 args=[
-                    [[field, "in", skus]],
+                    [[field, "in", unresolved_skus]],
                     ["id", field, "name", "lst_price"],
                 ],
-                kwargs={"limit": max(1, len(skus))},
+                kwargs={"limit": max(1, len(unresolved_skus))},
             )
             or []
         )
 
-        out: dict[str, dict[str, Any]] = {}
         for row in rows:
             key = row.get(field)
             if key:
