@@ -18,7 +18,7 @@ from app.models.odoo_product_cache import get_odoo_product_cache_store
 from app.models.product_image_store import get_product_image_store
 from app.models.scan_store import get_scan_store
 from app.models.theme_store import ThemeRecord, get_theme_store
-from app.vision.infer import MODEL_VERSION, infer_topk_candidates
+from app.vision.infer import MODEL_VERSION, infer_with_phash
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -85,6 +85,9 @@ class InferOut(BaseModel):
 
     scan_id: str
     model_version: str
+    is_match: bool
+    best_score: float
+    threshold: float
     detections: list[DetectionOut]
 
 
@@ -203,15 +206,18 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
         # Theme 未指定時は master_skus 全体を候補母集団にする。
         allowed_skus = set(master_skus)
 
+    sku_phashes = product_image_store.list_sku_phashes(allowed_skus=allowed_skus)
+
     image_bytes = store.load_image_bytes(scan_id)
-    predictions = infer_topk_candidates(
+    infer_result = infer_with_phash(
         image_bytes=image_bytes,
         top_k=body.top_k,
         theme_id=effective_theme_id,
         allowed_skus=sorted(allowed_skus),
+        reference_phashes_by_sku=sku_phashes,
     )
     cache_name_map = get_odoo_product_cache_store().get_name_map(
-        [prediction.sku for prediction in predictions]
+        [prediction.sku for prediction in infer_result.candidates]
     )
     detections = [
         {
@@ -222,7 +228,7 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
                     "name": cache_name_map.get(p.sku, p.name),
                     "score": p.score,
                 }
-                for p in predictions
+                for p in infer_result.candidates
             ],
         }
     ]
@@ -235,5 +241,8 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
     return InferOut(
         scan_id=updated.scan_id,
         model_version=updated.model_version or MODEL_VERSION,
+        is_match=infer_result.is_match,
+        best_score=infer_result.best_score,
+        threshold=infer_result.threshold,
         detections=updated.detections,
     )
