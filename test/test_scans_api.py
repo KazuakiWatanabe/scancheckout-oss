@@ -70,7 +70,11 @@ def test_create_scan_and_infer_success(client: TestClient) -> None:
 
     infer_payload = infer_response.json()
     assert infer_payload["scan_id"] == scan_id
-    assert infer_payload["model_version"] == "dummy-hash-v1"
+    assert infer_payload["model_version"] == "embedding-onnx-v1"
+    assert infer_payload["model_id"] == "embedding-onnx-v1"
+    assert infer_payload["is_match"] is True
+    assert 0.0 <= infer_payload["best_score"] <= 1.0
+    assert infer_payload["threshold"] == 0.65
     assert len(infer_payload["detections"]) == 1
     assert infer_payload["detections"][0]["bbox"] == [0.0, 0.0, 1.0, 1.0]
     assert len(infer_payload["detections"][0]["candidates"]) == 3
@@ -113,6 +117,7 @@ def test_infer_accepts_null_theme_id(client: TestClient) -> None:
     assert infer_response.status_code == 200
     payload = infer_response.json()
     assert payload["scan_id"] == scan_id
+    assert payload["is_match"] is True
     assert len(payload["detections"][0]["candidates"]) == 2
 
 

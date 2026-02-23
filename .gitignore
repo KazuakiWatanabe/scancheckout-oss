@@ -202,6 +202,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# ScanCheckout runtime artifacts
+storage/product_images/embeddings.json
+services/api/storage/product_images/embeddings.json
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
