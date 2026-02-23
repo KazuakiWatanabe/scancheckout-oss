@@ -94,3 +94,49 @@
 | sku | string | Yes | 候補 SKU |
 | name | string | Yes | 表示名 |
 | score | float | Yes | 類似度スコア（0〜1） |
+
+## 7. テーブル名・カラム名の日本語訳
+
+## 7.1 テーブル名
+
+| 英語名 | 日本語訳 |
+| --- | --- |
+| themes | テーママスタ |
+| theme_skus | テーマSKU対応 |
+| product_images | 商品画像マスタ |
+| product_embeddings | 商品埋め込みベクトル |
+| scans | スキャン履歴 |
+| scan_detections | スキャン検出領域 |
+| detection_candidates | 検出候補 |
+
+## 7.2 カラム名
+
+| 英語名 | 日本語訳 |
+| --- | --- |
+| theme_id | テーマID |
+| image_id | 画像ID |
+| scan_id | スキャンID |
+| sku | 商品管理コード |
+| sku_list | SKU一覧 |
+| filename | ファイル名 |
+| content_type | コンテントタイプ（MIME種別） |
+| created_at | 作成日時 |
+| updated_at | 更新日時 |
+| note | 備考 |
+| phash | 知覚ハッシュ |
+| version | 形式バージョン |
+| model | モデル名 |
+| dim | 次元数 |
+| items | 項目辞書 |
+| vector | ベクトル |
+| store_id | 店舗ID |
+| device_id | 端末ID |
+| image_uri | 画像保存先URI |
+| size_bytes | サイズ（バイト） |
+| detections | 検出結果 |
+| model_version | モデルバージョン |
+| detection_index | 検出インデックス |
+| bbox | バウンディングボックス（検出領域） |
+| rank | 候補順位 |
+| score | 類似度スコア |
+| name | 表示名 |

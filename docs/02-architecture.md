@@ -17,10 +17,10 @@
 flowchart LR
   UI[UI / Client] --> API[FastAPI routes]
 
-  API --> SCAN_ROUTE[/scans]
-  API --> IMG_ROUTE[/product-images]
-  API --> THEME_ROUTE[/themes]
-  API --> POS_ROUTE[/pos/checkout]
+  API --> SCAN_ROUTE["/scans"]
+  API --> IMG_ROUTE["/product-images"]
+  API --> THEME_ROUTE["/themes"]
+  API --> POS_ROUTE["/pos/checkout"]
 
   SCAN_ROUTE --> VISION[vision/infer.py + embedding.py + phash.py]
   SCAN_ROUTE --> SCAN_STORE[models/scan_store.py]
@@ -69,3 +69,17 @@ flowchart LR
 - routes から Odoo `call_kw` を直接呼ばない。
 - vision は外部 API/Odoo に依存しない。
 - 永続化は models に限定する。
+
+## 5. 用語の日本語訳
+
+| 英語 | 日本語訳 |
+| --- | --- |
+| routes | ルート層（HTTP入出力層） |
+| pos_adapters | POS連携アダプタ層 |
+| vision | 推論層 |
+| models | 永続化層 |
+| Client | クライアント |
+| storage | 保存領域 |
+| scan | スキャン |
+| infer | 推論 |
+| checkout | 会計登録 |

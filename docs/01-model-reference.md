@@ -32,3 +32,17 @@
 
 - モデル差し替えは環境変数で可能です（`INFER_MODEL_PATH` 変更）。
 - 差し替え時は入力サイズ、出力次元、閾値（`INFER_EMBED_THRESHOLD`）を再調整してください。
+
+## 5. 用語の日本語訳
+
+| 英語 | 日本語訳 |
+| --- | --- |
+| Embedding | 埋め込み特徴量 |
+| model | モデル |
+| input tensor | 入力テンソル |
+| output tensor | 出力テンソル |
+| vector | ベクトル |
+| cosine similarity | コサイン類似度 |
+| threshold | 閾値 |
+| model_id | モデル識別子 |
+| batch_size | バッチサイズ |
