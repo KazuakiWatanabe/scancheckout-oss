@@ -12,6 +12,9 @@ Note:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from app.models.odoo_product_cache import get_odoo_product_cache_store
 from fastapi.testclient import TestClient
 
 
@@ -122,3 +125,40 @@ def test_infer_returns_404_for_unknown_scan(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert "scan_id が存在しません" in response.json()["detail"]
+
+
+def test_infer_uses_odoo_cache_name_when_available(client: TestClient) -> None:
+    """infer 候補の name が Odoo キャッシュで上書きされることを確認する。"""
+    _register_master_image(client, "BREAD-001")
+    get_odoo_product_cache_store().replace_from_odoo_rows(
+        rows=[
+            {
+                "id": 501,
+                "default_code": "BREAD-001",
+                "name": "山型食パン",
+                "active": True,
+                "barcode": None,
+                "lst_price": 220.0,
+            }
+        ],
+        synced_at=datetime(2026, 2, 22, 12, 0, 0, tzinfo=timezone.utc),
+    )
+
+    upload_response = client.post(
+        "/scans",
+        data={"store_id": "store-03"},
+        files={"image": ("sample.png", _sample_png_bytes(), "image/png")},
+    )
+    assert upload_response.status_code == 200
+    scan_id = upload_response.json()["scan_id"]
+
+    infer_response = client.post(
+        f"/scans/{scan_id}/infer",
+        json={"top_k": 1},
+    )
+    assert infer_response.status_code == 200
+
+    payload = infer_response.json()
+    candidate = payload["detections"][0]["candidates"][0]
+    assert candidate["sku"] == "BREAD-001"
+    assert candidate["name"] == "山型食パン"

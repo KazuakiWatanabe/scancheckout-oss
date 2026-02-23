@@ -28,6 +28,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from app.main import app  # noqa: E402
+from app.models import odoo_product_cache as odoo_product_cache_module  # noqa: E402
 from app.models import product_image_store as product_image_store_module  # noqa: E402
 from app.models import scan_store as scan_store_module  # noqa: E402
 from app.models import theme_store as theme_store_module  # noqa: E402
@@ -46,6 +47,7 @@ def client(tmp_path: Path) -> TestClient:
     image_dir = tmp_path / "images"
     theme_file = tmp_path / "themes" / "themes.json"
     product_image_root = tmp_path / "product_images"
+    odoo_product_cache_file = tmp_path / "odoo_product_cache.json"
     scan_store_module._SCAN_STORE = scan_store_module.InMemoryScanStore(
         image_dir=image_dir
     )
@@ -55,6 +57,11 @@ def client(tmp_path: Path) -> TestClient:
     product_image_store_module._PRODUCT_IMAGE_STORE = (
         product_image_store_module.ProductImageStore(root_dir=product_image_root)
     )
+    odoo_product_cache_module._ODOO_PRODUCT_CACHE_STORE = (
+        odoo_product_cache_module.OdooProductCacheStore(
+            file_path=odoo_product_cache_file
+        )
+    )
 
     with TestClient(app) as test_client:
         yield test_client
@@ -62,3 +69,4 @@ def client(tmp_path: Path) -> TestClient:
     scan_store_module._SCAN_STORE = None
     theme_store_module._THEME_STORE = None
     product_image_store_module._PRODUCT_IMAGE_STORE = None
+    odoo_product_cache_module._ODOO_PRODUCT_CACHE_STORE = None
