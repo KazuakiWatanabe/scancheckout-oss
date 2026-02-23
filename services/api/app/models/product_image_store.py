@@ -6,7 +6,7 @@
 - SKU 単位の検索、image_id 単位の取得/削除
 
 Note:
-    - 画像比較アルゴリズムは本モジュールの責務外。
+    - 商品画像ごとの pHash を index.json に保持する。
     - 画像は `storage/product_images/<sku>/<image_id>.<ext>` へ保存する。
 """
 
@@ -20,6 +20,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Optional
 from uuid import uuid4
+
+from app.vision.phash import compute_phash_hex
 
 INDEX_VERSION = 1
 INDEX_FILENAME = "index.json"
@@ -45,6 +47,7 @@ class ProductImageRecord:
         content_type: MIME タイプ。
         created_at: 登録時刻（UTC）。
         note: 補足メモ（任意）。
+        phash: 画像の知覚ハッシュ（16進文字列、計算不可時は None）。
     """
 
     image_id: str
@@ -53,6 +56,7 @@ class ProductImageRecord:
     content_type: str
     created_at: datetime
     note: Optional[str]
+    phash: Optional[str]
 
 
 def normalize_sku(value: str) -> str:
@@ -117,6 +121,7 @@ class ProductImageStore:
             content_type=content_type,
             created_at=datetime.now(timezone.utc),
             note=note.strip() if note and note.strip() else None,
+            phash=self._compute_phash_safe(image_bytes=image_bytes),
         )
         with self._lock:
             self._records_by_id[record.image_id] = record
@@ -160,6 +165,60 @@ class ProductImageStore:
         with self._lock:
             return {record.sku for record in self._records_by_id.values()}
 
+    def list_sku_phashes(
+        self,
+        *,
+        allowed_skus: Optional[set[str]] = None,
+    ) -> dict[str, list[str]]:
+        """SKU ごとの pHash 一覧を返す。
+
+        主要変数:
+            allowed: フィルタ対象 SKU 集合。None の場合は全SKUを対象とする。
+            output: `{"SKU": ["phash1", "phash2"]}` 形式の返却値。
+
+        Note:
+            - `phash` 欠損レコードは遅延計算を試行し、成功時は index.json を更新する。
+            - 計算に失敗した画像はスキップし、例外で処理全体を止めない。
+        """
+        allowed = {normalize_sku(sku) for sku in allowed_skus} if allowed_skus else None
+        output: dict[str, list[str]] = {}
+        is_updated = False
+
+        with self._lock:
+            records = sorted(
+                self._records_by_id.values(),
+                key=lambda item: item.created_at,
+            )
+            for record in records:
+                if allowed is not None and record.sku not in allowed:
+                    continue
+
+                phash = record.phash
+                if not phash:
+                    phash = self._compute_phash_from_stored_image(record)
+                    if phash:
+                        updated = ProductImageRecord(
+                            image_id=record.image_id,
+                            sku=record.sku,
+                            filename=record.filename,
+                            content_type=record.content_type,
+                            created_at=record.created_at,
+                            note=record.note,
+                            phash=phash,
+                        )
+                        self._records_by_id[record.image_id] = updated
+                        is_updated = True
+
+                if not phash:
+                    continue
+
+                sku_hashes = output.setdefault(record.sku, [])
+                sku_hashes.append(phash)
+
+            if is_updated:
+                self._save_index()
+        return output
+
     def delete_image(self, image_id: str) -> bool:
         """image_id に対応する画像を削除する。
 
@@ -201,6 +260,7 @@ class ProductImageStore:
                 content_type=str(item["content_type"]),
                 created_at=datetime.fromisoformat(str(item["created_at"])),
                 note=(str(item["note"]) if item.get("note") else None),
+                phash=(str(item["phash"]) if item.get("phash") else None),
             )
             records[record.image_id] = record
         self._records_by_id = records
@@ -218,6 +278,7 @@ class ProductImageStore:
                     "content_type": record.content_type,
                     "created_at": record.created_at.isoformat(),
                     "note": record.note,
+                    "phash": record.phash,
                 }
                 for record in records
             ],
@@ -226,6 +287,27 @@ class ProductImageStore:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _compute_phash_safe(self, *, image_bytes: bytes) -> Optional[str]:
+        """画像バイト列から pHash を安全に計算する。"""
+        try:
+            return compute_phash_hex(image_bytes)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _compute_phash_from_stored_image(
+        self,
+        record: ProductImageRecord,
+    ) -> Optional[str]:
+        """保存済み画像から pHash を計算する。"""
+        image_path = self._root_dir / record.sku / record.filename
+        if not image_path.exists():
+            return None
+        try:
+            image_bytes = image_path.read_bytes()
+        except OSError:
+            return None
+        return self._compute_phash_safe(image_bytes=image_bytes)
 
 
 _PRODUCT_IMAGE_STORE: Optional[ProductImageStore] = None
