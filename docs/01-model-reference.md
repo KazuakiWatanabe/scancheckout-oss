@@ -1,10 +1,8 @@
 # 01. Embedding モデル参照
 
-## 1. 参照論文
+## 1. 参照ページ
 
-- 論文: *Searching for MobileNetV3*
-- URL: https://arxiv.org/abs/1905.02244
-- 用途: 軽量 CNN バックボーン設計（モバイル/CPU 推論向け）
+- URL: https://huggingface.co/onnx-models/all-roberta-large-v1-onnx
 
 ## 2. 本リポジトリで使用しているモデル
 
