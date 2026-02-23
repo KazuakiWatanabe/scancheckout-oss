@@ -1,28 +1,36 @@
-"""候補提示用のダミー推論モジュール。
+"""Embedding 類似度ベースの推論モジュール。
 
-本モジュールは MVP 向けに、以下を提供する。
-- 商品画像マスターの pHash と撮影画像 pHash の類似度比較
-- TopK 候補生成
-- 閾値未満時の Reject（該当なし）判定
+本モジュールは、以下の推論ロジックを提供する。
+- pHash による粗い Reject ゲート（任意）
+- Embedding cosine 類似度で SKU 候補をランキング
+- 閾値未満時の Reject（候補0件）
+
+互換性のため、既存の pHash 推論 API も保持する。
+- infer_with_phash
+- infer_topk_candidates
 
 Note:
-    - DB や外部 API には依存しない。
-    - `INFER_PHASH_THRESHOLD` で reject 閾値を上書きできる。
+    - DB/外部API には依存しない。
+    - 入力に必要な参照データは routes 層から受け取る。
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Sequence
 
+import numpy as np
+from app.vision import embedding as embedding_module
 from app.vision.phash import (
     compute_phash_hex,
     hamming_distance,
     score_from_hamming_distance,
 )
 
-MODEL_VERSION = "phash-reject-v1"
+MODEL_VERSION = "embedding-onnx-v1"
+PHASH_MODEL_ID = "phash-reject-v1"
 DEFAULT_PHASH_THRESHOLD = 0.55
 
 
@@ -42,14 +50,16 @@ class CandidatePrediction:
 class InferDecision:
     """推論結果全体を表す値オブジェクト。"""
 
-    # threshold を満たす候補が存在するかどうか。
+    # 最終判定（threshold 以上なら True）。
     is_match: bool
-    # 全候補中の最高スコア（候補0件時は 0.0）。
+    # best SKU のスコア。
     best_score: float
     # 判定に使った閾値。
     threshold: float
-    # 返却対象の候補一覧。
+    # 候補配列。
     candidates: list[CandidatePrediction]
+    # 返却するモデル識別子。
+    model_id: str = ""
 
 
 def get_phash_threshold() -> float:
@@ -72,17 +82,7 @@ def infer_with_phash(
     reference_phashes_by_sku: Optional[dict[str, list[str]]] = None,
     threshold: Optional[float] = None,
 ) -> InferDecision:
-    """pHash 類似度に基づいて候補 TopK と Reject 判定を返す。
-
-    主要変数:
-        sorted_skus: 推論対象 SKU を正規化・昇順化した配列。
-        best_score: 全SKUの中で最も高い類似スコア。
-        threshold_value: reject 判定に使う閾値。
-
-    Note:
-        - `best_score < threshold` の場合は candidates を空で返す。
-        - `reference_phashes_by_sku` に pHash が無い SKU は評価対象外とする。
-    """
+    """pHash 類似度に基づいて候補 TopK と Reject 判定を返す。"""
     if top_k < 1:
         raise ValueError("top_k must be >= 1")
 
@@ -101,6 +101,7 @@ def infer_with_phash(
             best_score=0.0,
             threshold=threshold_value,
             candidates=[],
+            model_id=PHASH_MODEL_ID,
         )
 
     sorted_skus = sorted({sku for sku in allowed_skus if sku})
@@ -110,6 +111,7 @@ def infer_with_phash(
             best_score=0.0,
             threshold=threshold_value,
             candidates=[],
+            model_id=PHASH_MODEL_ID,
         )
 
     try:
@@ -120,6 +122,7 @@ def infer_with_phash(
             best_score=0.0,
             threshold=threshold_value,
             candidates=[],
+            model_id=PHASH_MODEL_ID,
         )
 
     phashes_map = reference_phashes_by_sku or {}
@@ -148,6 +151,7 @@ def infer_with_phash(
             best_score=0.0,
             threshold=threshold_value,
             candidates=[],
+            model_id=PHASH_MODEL_ID,
         )
 
     ordered = sorted(sku_best_scores, key=lambda item: (-item[1], item[0]))
@@ -159,13 +163,13 @@ def infer_with_phash(
             best_score=best_score,
             threshold=threshold_value,
             candidates=[],
+            model_id=PHASH_MODEL_ID,
         )
 
     max_count = min(top_k, len(ordered))
     predictions: list[CandidatePrediction] = []
     for rank in range(max_count):
         sku, score = ordered[rank]
-        # 商品名は SKU をそのまま使う（Phase 1 の暫定仕様）。
         predictions.append(CandidatePrediction(sku=sku, name=sku, score=score))
 
     return InferDecision(
@@ -173,6 +177,7 @@ def infer_with_phash(
         best_score=best_score,
         threshold=threshold_value,
         candidates=predictions,
+        model_id=PHASH_MODEL_ID,
     )
 
 
@@ -183,7 +188,6 @@ def infer_topk_candidates(
     allowed_skus: Optional[Sequence[str]] = None,
 ) -> list[CandidatePrediction]:
     """旧I/F互換のため候補一覧のみを返すラッパー。"""
-    # pHash 参照が渡されない旧経路では、従来どおり候補SKUを安定順で返す。
     _ = image_bytes
     _ = theme_id
     if top_k < 1:
@@ -199,3 +203,143 @@ def infer_topk_candidates(
         score = round(max(0.01, min(0.99, raw_score)), 4)
         predictions.append(CandidatePrediction(sku=sku, name=sku, score=score))
     return predictions
+
+
+def infer_with_embedding(
+    image_bytes: bytes,
+    *,
+    top_k: int,
+    allowed_skus: Sequence[str],
+    reference_embeddings_by_sku: dict[str, list[list[float]]],
+    reference_phashes_by_sku: dict[str, list[str]],
+    embed_threshold: float,
+    phash_threshold: float,
+    phash_gate_enabled: bool,
+    model_name: str,
+    model_path: Path,
+    model_input_size: int,
+) -> InferDecision:
+    """Embedding 類似度に基づく推論を実行する。"""
+    if top_k < 1:
+        raise ValueError("top_k must be >= 1")
+
+    candidate_skus = sorted({sku for sku in allowed_skus if sku})
+    if not candidate_skus:
+        return InferDecision(
+            is_match=False,
+            best_score=0.0,
+            threshold=embed_threshold,
+            candidates=[],
+            model_id=embedding_module.MODEL_ID,
+        )
+
+    if phash_gate_enabled:
+        if not _is_phash_gate_passed(
+            image_bytes=image_bytes,
+            skus=candidate_skus,
+            reference_phashes_by_sku=reference_phashes_by_sku,
+            threshold=phash_threshold,
+        ):
+            return InferDecision(
+                is_match=False,
+                best_score=0.0,
+                threshold=embed_threshold,
+                candidates=[],
+                model_id=embedding_module.MODEL_ID,
+            )
+
+    scan_vector = np.asarray(
+        embedding_module.compute_embedding_vector(
+            image_bytes,
+            model_name=model_name,
+            model_path=model_path,
+            input_size=model_input_size,
+        ),
+        dtype=np.float32,
+    )
+
+    sku_scores: list[tuple[str, float]] = []
+    for sku in candidate_skus:
+        reference_vectors = reference_embeddings_by_sku.get(sku) or []
+        best_for_sku = _best_similarity(scan_vector, reference_vectors)
+        if best_for_sku is None:
+            continue
+        sku_scores.append((sku, round(best_for_sku, 4)))
+
+    if not sku_scores:
+        return InferDecision(
+            is_match=False,
+            best_score=0.0,
+            threshold=embed_threshold,
+            candidates=[],
+            model_id=embedding_module.MODEL_ID,
+        )
+
+    ordered = sorted(sku_scores, key=lambda item: (-item[1], item[0]))
+    best_score = ordered[0][1]
+    if best_score < embed_threshold:
+        return InferDecision(
+            is_match=False,
+            best_score=best_score,
+            threshold=embed_threshold,
+            candidates=[],
+            model_id=embedding_module.MODEL_ID,
+        )
+
+    max_count = min(top_k, len(ordered))
+    candidates: list[CandidatePrediction] = []
+    for idx in range(max_count):
+        sku, score = ordered[idx]
+        candidates.append(CandidatePrediction(sku=sku, name=sku, score=score))
+
+    return InferDecision(
+        is_match=True,
+        best_score=best_score,
+        threshold=embed_threshold,
+        candidates=candidates,
+        model_id=embedding_module.MODEL_ID,
+    )
+
+
+def _is_phash_gate_passed(
+    *,
+    image_bytes: bytes,
+    skus: list[str],
+    reference_phashes_by_sku: dict[str, list[str]],
+    threshold: float,
+) -> bool:
+    """pHash 粗判定を通過するか返す。"""
+    try:
+        scan_hash = compute_phash_hex(image_bytes)
+    except Exception:  # noqa: BLE001
+        return False
+
+    best_score = 0.0
+    for sku in skus:
+        for ref_hash in reference_phashes_by_sku.get(sku) or []:
+            if not ref_hash:
+                continue
+            try:
+                distance = hamming_distance(scan_hash, ref_hash)
+            except ValueError:
+                continue
+            score = score_from_hamming_distance(distance)
+            if score > best_score:
+                best_score = score
+    return best_score >= threshold
+
+
+def _best_similarity(
+    scan_vector: np.ndarray,
+    reference_vectors: list[list[float]],
+) -> Optional[float]:
+    """1 SKU 内で最も高い cosine 類似度を返す。"""
+    best: Optional[float] = None
+    for ref in reference_vectors:
+        ref_vector = np.asarray(ref, dtype=np.float32)
+        if ref_vector.ndim != 1 or ref_vector.shape[0] != scan_vector.shape[0]:
+            continue
+        score = embedding_module.cosine_similarity(scan_vector, ref_vector)
+        if best is None or score > best:
+            best = score
+    return best

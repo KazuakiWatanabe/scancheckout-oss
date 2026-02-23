@@ -73,10 +73,11 @@ def test_create_scan_and_infer_success(client: TestClient) -> None:
 
     infer_payload = infer_response.json()
     assert infer_payload["scan_id"] == scan_id
-    assert infer_payload["model_version"] == "phash-reject-v1"
+    assert infer_payload["model_version"] == "embedding-onnx-v1"
+    assert infer_payload["model_id"] == "embedding-onnx-v1"
     assert infer_payload["is_match"] is True
     assert 0.0 <= infer_payload["best_score"] <= 1.0
-    assert infer_payload["threshold"] == 0.55
+    assert infer_payload["threshold"] == 0.65
     assert len(infer_payload["detections"]) == 1
     assert infer_payload["detections"][0]["bbox"] == [0.0, 0.0, 1.0, 1.0]
     assert len(infer_payload["detections"][0]["candidates"]) == 3

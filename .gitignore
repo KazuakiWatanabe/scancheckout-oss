@@ -202,7 +202,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# ScanCheckout runtime cache
+# ScanCheckout runtime artifacts / cache
+storage/product_images/embeddings.json
+services/api/storage/product_images/embeddings.json
 storage/odoo_product_cache.json
 
 # Marimo

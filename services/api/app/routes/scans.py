@@ -14,11 +14,14 @@ from __future__ import annotations
 
 from typing import Optional
 
+from app.config import get_infer_settings
 from app.models.odoo_product_cache import get_odoo_product_cache_store
+from app.models.product_embedding_store import get_product_embedding_store
 from app.models.product_image_store import get_product_image_store
 from app.models.scan_store import get_scan_store
 from app.models.theme_store import ThemeRecord, get_theme_store
-from app.vision.infer import MODEL_VERSION, infer_with_phash
+from app.vision import embedding as embedding_module
+from app.vision.infer import MODEL_VERSION, infer_with_embedding
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -85,6 +88,7 @@ class InferOut(BaseModel):
 
     scan_id: str
     model_version: str
+    model_id: str
     is_match: bool
     best_score: float
     threshold: float
@@ -206,16 +210,44 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
         # Theme 未指定時は master_skus 全体を候補母集団にする。
         allowed_skus = set(master_skus)
 
-    sku_phashes = product_image_store.list_sku_phashes(allowed_skus=allowed_skus)
-
-    image_bytes = store.load_image_bytes(scan_id)
-    infer_result = infer_with_phash(
-        image_bytes=image_bytes,
-        top_k=body.top_k,
-        theme_id=effective_theme_id,
-        allowed_skus=sorted(allowed_skus),
-        reference_phashes_by_sku=sku_phashes,
+    reference_records = product_image_store.list_reference_records(
+        allowed_skus=allowed_skus
     )
+    phashes_by_sku: dict[str, list[str]] = {}
+    image_ids = [record.image_id for record in reference_records]
+    embeddings_by_image_id = get_product_embedding_store().get_embeddings(image_ids)
+    embeddings_by_sku: dict[str, list[list[float]]] = {}
+    for record in reference_records:
+        if record.phash:
+            phashes_by_sku.setdefault(record.sku, []).append(record.phash)
+        vector = embeddings_by_image_id.get(record.image_id)
+        if vector:
+            embeddings_by_sku.setdefault(record.sku, []).append(vector)
+
+    settings = get_infer_settings()
+    image_bytes = store.load_image_bytes(scan_id)
+    try:
+        infer_result = infer_with_embedding(
+            image_bytes=image_bytes,
+            top_k=body.top_k,
+            allowed_skus=sorted(allowed_skus),
+            reference_embeddings_by_sku=embeddings_by_sku,
+            reference_phashes_by_sku=phashes_by_sku,
+            embed_threshold=settings.embed_threshold,
+            phash_threshold=settings.phash_threshold,
+            phash_gate_enabled=settings.phash_gate_enabled,
+            model_name=settings.model_name,
+            model_path=settings.model_path,
+            model_input_size=settings.input_size,
+        )
+    except embedding_module.EmbeddingModelError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Embedding モデルエラー: {exc}"
+        ) from exc
+    except RuntimeError as exc:
+        # embeddings.json 破損など。
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     cache_name_map = get_odoo_product_cache_store().get_name_map(
         [prediction.sku for prediction in infer_result.candidates]
     )
@@ -241,6 +273,7 @@ def infer_scan(scan_id: str, body: InferIn) -> InferOut:
     return InferOut(
         scan_id=updated.scan_id,
         model_version=updated.model_version or MODEL_VERSION,
+        model_id=infer_result.model_id,
         is_match=infer_result.is_match,
         best_score=infer_result.best_score,
         threshold=infer_result.threshold,
